@@ -152,11 +152,12 @@ export function formatTokens(count: number): string {
   return `${(count / 1_000_000).toFixed(1)}M`
 }
 
-function tokenNote(tokens: number, cachedTokens: number): string {
+/** New tokens first (what really counts), then the cheap ones read back from the cache. */
+export function tokenNote(tokens: number, cachedTokens: number): string {
   if (tokens <= 0) return ''
-  const cached = Math.round((100 * cachedTokens) / tokens)
+  if (cachedTokens <= 0) return `${formatTokens(tokens)} tokens`
 
-  return `${formatTokens(tokens)} tokens${cached > 0 ? ` · ${cached}% cached` : ''}`
+  return `${formatTokens(tokens - cachedTokens)} new · ${formatTokens(cachedTokens)} cached`
 }
 
 function sizeOf(raw: unknown): CleanViewTaskSize {
@@ -416,6 +417,8 @@ const startJob = async ($: $, text: string, jobId: string) => {
     jobId,
     planAt: null,
     plannedCount: 0,
+    extraTokens: 0,
+    extraCachedTokens: 0,
     // Work still running from the last job stays in view.
     helpers: (previous?.helpers ?? []).filter(one => one.status === 'running'),
   }
@@ -516,10 +519,22 @@ const addTokens = ($: $, agentId: string | undefined, usage: StepUsage) => {
     usage.input_tokens + usage.output_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
   if (total <= 0) return Promise.resolve(null)
 
+  const cached = usage.cache_read_input_tokens
+
   return change($, current => {
     const helper = agentId === undefined ? undefined : current.helpers.find(one => one.id === agentId)
     const stepId =
-      helper && current.tasks.some(one => one.id === helper.stepId) ? helper.stepId : currentStepId(current)
+      helper && current.tasks.some(one => one.id === helper.stepId)
+        ? helper.stepId
+        : current.tasks.find(one => one.status === 'active')?.id
+    // No step is running (Claude writing its final answer): the job's total only.
+    if (stepId === undefined && !helper) {
+      return {
+        ...current,
+        extraTokens: current.extraTokens + total,
+        extraCachedTokens: current.extraCachedTokens + cached,
+      }
+    }
     return {
       ...current,
       tasks: current.tasks.map(one =>
@@ -808,6 +823,8 @@ export function registerCleanView(on: On): void {
       await update($, checklistAtom, (list): CleanViewChecklist => ({
         planAt: list?.hasPlan ? (list.planAt ?? started) : started,
         plannedCount: list?.hasPlan ? list.plannedCount : steps.length,
+        extraTokens: list?.extraTokens ?? 0,
+        extraCachedTokens: list?.extraCachedTokens ?? 0,
         title: list?.title ?? 'Working on it',
         startedAt: list?.startedAt ?? started,
         jobId: list?.jobId ?? call.tool_use_id,
@@ -1096,8 +1113,9 @@ export function registerCleanView(on: On): void {
     }
 
     const elapsed = formatDuration((list.finishedAt ?? current) - list.startedAt)
-    const jobTokens = list.tasks.reduce((sum, one) => sum + one.tokens, 0)
-    const jobTokenNote = isDetailed && jobTokens > 0 ? `${formatTokens(jobTokens)} tokens` : ''
+    const jobTokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
+    const jobCached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
+    const jobTokenNote = isDetailed ? tokenNote(jobTokens, jobCached) : ''
     let header: RenderChildren
     if (list.phase === 'needsYou') {
       header = (

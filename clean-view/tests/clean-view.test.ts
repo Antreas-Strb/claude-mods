@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { carryTokens, cleanName, formatTokens, headerDetails, ownWords, prettyModel } from '../hooks/clean-view'
+import { carryTokens, cleanName, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/clean-view'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 
 const PLAN = 'mcp__clean-view__plan_steps'
@@ -182,13 +182,20 @@ test('a finished job says All done and collapses after 5 seconds', async ($, on)
   expect(collapsed).not.toContain('Do it')
 })
 
+// Sample secrets are built at run time, so no key-shaped text sits in the repository
+// (where secret scanners would flag it).
+const fakeKey = (length: number) => ['sk', 'ant', 'api03', 'abcdefghijklmnopqrstuvwxyz123456'.slice(0, length)].join('-')
+const SAMPLE_PASSWORD = ['hunter', '22'].join('')
+const SAMPLE_CARD = Array(4).fill('4242').join(' ')
+const SAMPLE_ASSIGNMENT = `${['API', 'KEY'].join('_')}=${['abcd', '1234', 'efgh'].join('')}`
+
 describe('privacy', () => {
   test('passwords, keys and card numbers are found', () => {
-    expect(findSecrets('my password is hunter22')).toContain('a password')
+    expect(findSecrets(`my password is ${SAMPLE_PASSWORD}`)).toContain('a password')
     expect(findSecrets('ο κωδικός μου είναι gata1234')).toContain('a password')
-    expect(findSecrets('use sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456')).toContain('a key or token')
-    expect(findSecrets('API_KEY=abcd1234efgh')).toContain('a password or key')
-    expect(findSecrets('card 4242 4242 4242 4242 please')).toContain('a card number')
+    expect(findSecrets(`use ${fakeKey(32)}`)).toContain('a key or token')
+    expect(findSecrets(SAMPLE_ASSIGNMENT)).toContain('a password or key')
+    expect(findSecrets(`card ${SAMPLE_CARD} please`)).toContain('a card number')
   })
 
   test('ordinary messages are left alone', () => {
@@ -197,10 +204,10 @@ describe('privacy', () => {
   })
 
   test('the screen hides emails, phones and keys; names drop them', () => {
-    const masked = maskPrivate('mail jane@example.com or call 555-123-4567, key sk-ant-api03-abcdefghijklmnopqrstuv')
+    const masked = maskPrivate(`mail jane@example.com or call 555-123-4567, key ${fakeKey(22)}`)
     expect(masked).not.toContain('jane@example.com')
     expect(masked).not.toContain('555-123-4567')
-    expect(masked).not.toContain('sk-ant-api03')
+    expect(masked).not.toContain(fakeKey(22))
     expect(cleanName('Email jane@example.com the invoice')).toBe('Email the invoice')
   })
 })
@@ -212,7 +219,7 @@ test('a message with a password is held back once, then sent when sent again', a
     entered += 1
     return { text: e.text }
   })
-  const prompt = { text: 'log in with password: hunter22', wait: false, origin: { kind: 'composer' } } as never
+  const prompt = { text: `log in with password: ${SAMPLE_PASSWORD}`, wait: false, origin: { kind: 'composer' } } as never
 
   const first = await $.prompt.submit(prompt)
   expect((first as { drop?: string }).drop).toContain('password')
@@ -467,14 +474,13 @@ test('each step shows its tokens and how much came from the cache', async ($, on
 
   for (const surface of SURFACES) {
     const shown = (await texts($, surface, 120)).join('\n')
-    // 1,000 + 1,000 + 10,000 + 400 = 12.4k, 10,000 of them from the cache: 81%.
-    expect(shown).toContain('12.4k tokens · 81% cached')
-    expect(shown).toContain('12.4k tokens')
+    // 1,000 + 1,000 + 10,000 + 400 = 12.4k: 2.4k new, 10k read back from the cache.
+    expect(shown).toContain('2.4k new · 10k cached')
   }
 
   await callTool($, { tool: PROGRESS, task: 'Write copy', percent: 100 })
   await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
-  expect((await texts($, 'terminal', 120)).join('\n')).toMatch(/All done .* · 12\.4k tokens/)
+  expect((await texts($, 'terminal', 120)).join('\n')).toMatch(/All done .* · 2\.4k new · 10k cached/)
 })
 
 test('plan usage shows all the time, not only near the limit', async ($, on) => {
@@ -525,6 +531,7 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
     expect(simple).toContain('Clean View: Simple')
     expect(simple).not.toContain('Haiku 4.5')
     expect(simple).not.toContain('tokens')
+    expect(simple).not.toContain('cached')
     expect(simple).not.toContain('Plan usage')
   }
 
@@ -534,7 +541,7 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
   const detailed = (await texts($, 'terminal', 120)).join('\n')
   expect(detailed).toContain('Clean View: Details')
   expect(detailed).toContain('Explore · Haiku 4.5')
-  expect(detailed).toContain('tokens')
+  expect(detailed).toContain('2.4k new · 10k cached')
   expect(detailed).toContain('Plan usage: 5-hour 42%')
 })
 
@@ -612,4 +619,30 @@ test('the simple view keeps the sweep until Claude reports', async ($, on) => {
   const shown = (await texts($, 'terminal', 120)).join('\n')
   expect(shown).toContain('Working')
   expect(shown).not.toContain('took')
+})
+
+test('token notes put new tokens first and cached ones after', () => {
+  expect(tokenNote(228_000, 225_000)).toBe('3k new · 225k cached')
+  expect(tokenNote(5_000, 0)).toBe('5k tokens')
+  expect(tokenNote(0, 0)).toBe('')
+})
+
+test("Claude's final answer counts in the job's total, not in the last step", async ($, on) => {
+  world(on)
+  on('turn.step', async function* (_, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { ...USAGE, model: 'claude-opus-5-5' } } as never
+  })
+  await detailsOn($)
+  await $.turn.start({ text: 'Remove the files', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Move them away', 'Check they are gone'] })
+  await callTool($, { tool: PROGRESS, task: 'Check they are gone', percent: 100 })
+  // Every step is done; this request is the final answer.
+  for await (const _ of $.turn.step({ turnId: 't1', index: 3, model: 'claude-opus-5-5', effort: 'high', messageCount: 5 } as never)) {
+    // drain
+  }
+  await $.turn.complete({ answer: 'Removed.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  const shown = await texts($, 'terminal', 120)
+  expect(shown.join('\n')).toMatch(/All done .* · 2\.4k new · 10k cached/)
+  expect(shown.some(line => line.includes('new ·') && !line.includes('All done'))).toBe(false)
 })

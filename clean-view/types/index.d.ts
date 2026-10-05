@@ -61,6 +61,10 @@ export type CleanViewChecklist = {
   plannedCount: number
   /** Subagents and background tasks this job started. */
   helpers: CleanViewHelper[]
+  /** Tokens of requests outside any step, such as Claude's final answer: counted in the job's total only. */
+  extraTokens: number
+  /** Of those, the tokens read from the prompt cache. */
+  extraCachedTokens: number
 }
 
 /** One plan window and how much of it is used. */

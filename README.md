@@ -29,7 +29,7 @@ The button above the prompt cycles **Simple → Details → Off**. Both the view
 
 - the current step's bar filling gradually from a time estimate, with its running time and time left, e.g. `62% 1m 52s · ~1m left`; finished steps show how long they took
 - each helper's type, model and effort, e.g. `Explore · Haiku 4.5 · low effort`
-- tokens per step and how much came from the prompt cache, e.g. `48k tokens · 93% cached`
+- tokens per step: new ones first, then the cheaper ones read back from the prompt cache, e.g. `3k new · 45k cached`. Claude's final answer counts in the job's total only
 - the job's total tokens
 - plan usage all the time, e.g. `Plan usage: 5-hour 42% · weekly 18% · chat 34% full`
 
