@@ -1,0 +1,14 @@
+{
+  "name": "claude-mods",
+  "description": "Claude Code mods by Antreas-Strb: Clean View, a calm checklist view for people who are not technical",
+  "owner": {
+    "name": "Antreas-Strb"
+  },
+  "plugins": [
+    {
+      "name": "clean-view",
+      "source": "./clean-view",
+      "description": "Hides tool rows and shows one plain-English checklist above the prompt: the plan, what is happening now, progress, helpers and background work, plus a password guard and plan usage (/simple)"
+    }
+  ]
+}
