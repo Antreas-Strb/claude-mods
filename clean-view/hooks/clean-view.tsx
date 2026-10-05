@@ -118,7 +118,7 @@ function fit(text: string, width: number): string {
 }
 
 function task(name: string, status: CleanViewTask['status'], id = name, size: CleanViewTaskSize = 'M'): CleanViewTask {
-  return { id, name, status, percent: status === 'done' ? 100 : 0, hasReported: status === 'done', size, tokens: 0, cachedTokens: 0 }
+  return { id, name, status, percent: status === 'done' ? 100 : 0, hasReported: status === 'done', size, tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null }
 }
 
 /** Token counts move to the new plan's step of the same name; the rest go to its first step, so the job total holds. */
@@ -166,11 +166,15 @@ function sizeOf(raw: unknown): CleanViewTaskSize {
 }
 
 /** Overall progress: finished work out of the plan, S/M/L counting 1/2/3, the current step in part. */
-export function overallProgress(tasks: CleanViewTask[]): { percent: number; doneCount: number; work: number } {
+export function overallProgress(
+  tasks: CleanViewTask[],
+  activePercent?: number,
+): { percent: number; doneCount: number; work: number } {
   const total = tasks.reduce((sum, one) => sum + SIZE_WEIGHT[one.size], 0)
   const work = tasks.reduce((sum, one) => {
     const weight = SIZE_WEIGHT[one.size]
     if (one.status === 'done') return sum + weight
+    if (one.status === 'active' && activePercent !== undefined) return sum + (weight * activePercent) / 100
     if (one.status === 'active' && one.hasReported) return sum + (weight * one.percent) / 100
     return sum
   }, 0)
@@ -180,6 +184,42 @@ export function overallProgress(tasks: CleanViewTask[]): { percent: number; done
     doneCount: tasks.filter(one => one.status === 'done').length,
     work: total ? work / total : 0,
   }
+}
+
+/** Each step's start and end time, stamped as its status changes. */
+export function stampTimes(tasks: CleanViewTask[], at: number): CleanViewTask[] {
+  return tasks.map(one => {
+    if (one.status === 'upcoming') return one.startedAt === null && one.finishedAt === null ? one : { ...one, startedAt: null, finishedAt: null }
+    if (one.status === 'active') return one.startedAt === null || one.finishedAt !== null ? { ...one, startedAt: one.startedAt ?? at, finishedAt: null } : one
+    return one.finishedAt === null ? { ...one, startedAt: one.startedAt ?? at, finishedAt: at } : one
+  })
+}
+
+// A step of size M is expected to take 3 minutes until this job's own pace is known.
+const DEFAULT_UNIT_MS = 90_000
+
+/**
+ * How far along the current step looks: time spent against the time this job's finished steps took per
+ * unit of size. It fills gradually, stays below 100 until the step is checked off, and never falls below
+ * what Claude reported.
+ */
+export function stepEstimate(list: CleanViewChecklist, one: CleanViewTask, at: number) {
+  const done = list.tasks.filter(
+    step => step.status === 'done' && step.startedAt !== null && step.finishedAt !== null && step.finishedAt > step.startedAt,
+  )
+  const units = done.reduce((sum, step) => sum + SIZE_WEIGHT[step.size], 0)
+  const spent = done.reduce((sum, step) => sum + (step.finishedAt! - step.startedAt!), 0)
+  const expected = Math.max(10_000, (units > 0 ? spent / units : DEFAULT_UNIT_MS) * SIZE_WEIGHT[one.size])
+  const elapsedMs = one.startedAt === null ? 0 : Math.max(0, at - one.startedAt)
+  const estimate = Math.min(95, Math.round((100 * elapsedMs) / expected))
+  const percent = Math.min(99, Math.max(one.hasReported ? one.percent : 0, estimate))
+  const leftMs = percent > 0 ? (elapsedMs * (100 - percent)) / percent : expected
+
+  return { percent, elapsedMs, leftMs }
+}
+
+function leftLabel(ms: number): string {
+  return ms < 60_000 ? '<1m left' : `~${formatLeft(ms)} left`
 }
 
 /** Time left at this job's own pace since the plan; nothing until two steps are done. */
@@ -351,7 +391,11 @@ const syncTicker = ($: $, list: CleanViewChecklist | null) => {
 }
 
 const change = async ($: $, fn: (list: CleanViewChecklist) => CleanViewChecklist | null) => {
-  const next = await update($, checklistAtom, list => (list ? fn(list) : list))
+  const at = await now($)
+  const next = await update($, checklistAtom, list => {
+    const changed = list ? fn(list) : list
+    return changed ? { ...changed, tasks: stampTimes(changed.tasks, at) } : changed
+  })
   syncTicker($, next)
 
   return next
@@ -362,7 +406,7 @@ const startJob = async ($: $, text: string, jobId: string) => {
   const list: CleanViewChecklist = {
     title: cleanName(text.split('\n')[0]),
     phase: 'working',
-    tasks: [task('Understand your request', 'active'), task('Plan the steps', 'upcoming')],
+    tasks: stampTimes([task('Understand your request', 'active'), task('Plan the steps', 'upcoming')], await now($)),
     needsYouReason: null,
     stuckReason: null,
     startedAt: await now($),
@@ -521,6 +565,23 @@ const setEnabled = async ($: $, isEnabled: boolean) => {
   await update($, enabledAtom, () => isEnabled)
   await $.store.set(STORE_KEY, isEnabled)
   $.ui.toast(isEnabled ? 'Clean View is on: tool details are hidden' : 'Clean View is off: showing everything')
+}
+
+/** The one button: Simple → Details → Off → Simple. */
+const cycleMode = async ($: $, isEnabled: boolean, isDetailed: boolean) => {
+  const nextEnabled = !(isEnabled && isDetailed)
+  const nextDetailed = isEnabled && !isDetailed
+  await update($, enabledAtom, () => nextEnabled)
+  await update($, detailAtom, () => (nextDetailed ? 'detailed' : 'simple'))
+  await $.store.set(STORE_KEY, nextEnabled)
+  await $.store.set(DETAIL_KEY, nextDetailed ? 'detailed' : 'simple')
+  $.ui.toast(
+    !nextEnabled
+      ? 'Clean View is off: showing everything'
+      : nextDetailed
+        ? 'Clean View details: models, time, tokens, cache and plan usage'
+        : 'Clean View simple: just the steps and progress',
+  )
 }
 
 const setDetail = async ($: $, isDetailed: boolean) => {
@@ -756,7 +817,7 @@ export function registerCleanView(on: On): void {
         stuckReason: null,
         phase: 'working',
         hasPlan: true,
-        tasks: carryTokens(list?.tasks ?? [], tasks),
+        tasks: stampTimes(carryTokens(list?.tasks ?? [], tasks), started),
         helpers: list?.helpers ?? [],
       }))
       syncTicker($, await read($, checklistAtom))
@@ -1006,25 +1067,16 @@ export function registerCleanView(on: On): void {
       )
     }
 
-    const isWide = columns >= 110
+    // One button for every choice: Simple → Details → Off.
     const button = (
-      <Box flexDirection="row" gap={1}>
-        {isEnabled &&
-          (isWide ? (
-            <Button key="details" label={isDetailed ? '▾ Details' : '▸ Details'} onPress={() => setDetail($, !isDetailed)} />
-          ) : (
-            <Button key="details" plain label={isDetailed ? '▾' : '▸'} onPress={() => setDetail($, !isDetailed)} />
-          ))}
-        <Button
-          key="toggle"
-          label={isEnabled ? '● Clean View: ON' : '○ Clean View: OFF'}
-          variant={isEnabled ? 'primary' : 'secondary'}
-          onPress={() => setEnabled($, !isEnabled)}
-        />
-      </Box>
+      <Button
+        key="toggle"
+        label={!isEnabled ? '○ Clean View: Off' : isDetailed ? '● Clean View: Details' : '● Clean View: Simple'}
+        variant={isEnabled ? 'primary' : 'secondary'}
+        onPress={() => cycleMode($, isEnabled, isDetailed)}
+      />
     )
-    // The Details button shrinks to one glyph on a narrow screen, so the header keeps its room.
-    const headerWidth = Math.max(0, columns - (!isEnabled ? 24 : isWide ? 38 : 27))
+    const headerWidth = Math.max(0, columns - 27)
     const row = (header: RenderChildren) => (
       <Box key="header" flexDirection="row" justifyContent="space-between" width={columns}>
         <Box flexShrink={1} flexGrow={1}>
@@ -1083,11 +1135,13 @@ export function registerCleanView(on: On): void {
       )
     } else {
       const left = list.hasPlan ? timeLeft(list, current) : null
+      const activeStep = list.tasks.find(one => one.status === 'active')
+      const activeEstimate = isDetailed && activeStep ? stepEstimate(list, activeStep, current).percent : undefined
       const hasGrown = list.hasPlan && list.plannedCount > 0 && list.tasks.length > list.plannedCount
       // Time left replaces time spent once there is an estimate.
       const details = headerDetails(
         [
-          list.hasPlan ? `${overallProgress(list.tasks).percent}%` : '',
+          list.hasPlan ? `${overallProgress(list.tasks, activeEstimate).percent}%` : '',
           left === null ? elapsed : `about ${formatLeft(left)} left`,
           hasGrown ? `plan grew ${list.plannedCount} → ${list.tasks.length}` : '',
           jobTokenNote,
@@ -1118,7 +1172,14 @@ export function registerCleanView(on: On): void {
     // What is left of the row after mark, name, meter and label: the step's tokens, when they fit.
     const usageRoom = columns - 2 - nameWidth - (METER + 2) - LABEL_WIDTH - 1
     const usageCell = (one: CleanViewTask) => {
-      const note = tokenNote(one.tokens, one.cachedTokens)
+      let timeNote = ''
+      if (one.status === 'done' && one.startedAt !== null && one.finishedAt !== null) {
+        timeNote = `took ${formatDuration(one.finishedAt - one.startedAt)}`
+      } else if (one.status === 'active') {
+        const estimate = stepEstimate(list, one, current)
+        timeNote = `${formatDuration(estimate.elapsedMs)} · ${leftLabel(estimate.leftMs)}`
+      }
+      const note = [timeNote, tokenNote(one.tokens, one.cachedTokens)].filter(Boolean).join(' · ')
       return isDetailed && note && usageRoom >= 12 ? <Text dimColor>{` ${fit(note, usageRoom - 1).trimEnd()}`}</Text> : null
     }
     const lastStepId = list.tasks[list.tasks.length - 1]?.id
@@ -1149,9 +1210,12 @@ export function registerCleanView(on: On): void {
           ),
         })
       } else if (one.status === 'active') {
-        const filled = Math.round(one.percent / 10)
+        // The details view fills the bar gradually from the time estimate; the simple view sweeps until Claude reports.
+        const shownPercent = isDetailed ? stepEstimate(list, one, current).percent : one.percent
+        const hasPercent = isDetailed || one.hasReported
+        const filled = Math.round(shownPercent / 10)
         const sweepAt = tick % (METER + 3)
-        const meter = one.hasReported
+        const meter = hasPercent
           ? '█'.repeat(filled) + '░'.repeat(METER - filled)
           : Array.from({ length: METER }, (_, cell) => (cell >= sweepAt - 2 && cell <= sweepAt ? '█' : '░')).join('')
         lines.push({
@@ -1162,7 +1226,7 @@ export function registerCleanView(on: On): void {
               <Text color="cyan">{list.phase === 'needsYou' ? '‖ ' : '▶ '}</Text>
               <Text bold>{fit(one.name, nameWidth)}</Text>
               <Text color="cyan"> {meter} </Text>
-              <Text>{fit(one.hasReported ? `${one.percent}%` : 'Working', LABEL_WIDTH)}</Text>
+              <Text>{fit(hasPercent ? `${shownPercent}%` : 'Working', LABEL_WIDTH)}</Text>
               {usageCell(one)}
             </Box>
           ),

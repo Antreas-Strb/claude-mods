@@ -5,7 +5,7 @@
 Clean View makes Claude Code calm and friendly for people who aren't technical. While Claude works, tool calls, file diffs and command output are hidden, and one checklist sits above the prompt: the plan, what is happening now and how far along it is.
 
 ```
-Build my landing page · 60% · about 4m left          [ ▸ Details ] [ ● Clean View: ON ]
+Build my landing page · 60% · about 4m left               [ ● Clean View: Simple ]
 ✓ Read your brand notes       ██████████ Done
 ▶ Build the pricing section   ██████░░░░ 60%
   ↳ ◐ Find the pricing data   Explore
@@ -21,10 +21,13 @@ Build my landing page · 60% · about 4m left          [ ▸ Details ] [ ● Cle
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
 - **Plan limits:** a warning shows at 80% of a plan window (red at 95%), and a "Tidy it up" button appears when the chat gets long.
 
-### Details view
+### One button, three views
 
-Press **▸ Details** (or type `/simple details`) to also see:
+The button above the prompt cycles **Simple → Details → Off**. Both the view and on/off are remembered after a restart.
 
+**Details** (or `/simple details`) also shows:
+
+- the current step's bar filling gradually from a time estimate, with its running time and time left, e.g. `62% 1m 52s · ~1m left`; finished steps show how long they took
 - each helper's type, model and effort, e.g. `Explore · Haiku 4.5 · low effort`
 - tokens per step and how much came from the prompt cache, e.g. `48k tokens · 93% cached`
 - the job's total tokens
@@ -39,7 +42,7 @@ Press **▸ Details** (or type `/simple details`) to also see:
 | `/simple details` | Turns the details view on or off |
 | `/simple details on`, `/simple details off` | Turns the details view on or off |
 
-The button above the prompt does the same as `/simple`. Both choices are remembered after a restart.
+The button above the prompt cycles Simple, Details and Off.
 
 ### Requirements
 

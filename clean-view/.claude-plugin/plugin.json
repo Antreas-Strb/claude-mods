@@ -1,6 +1,6 @@
 {
   "name": "clean-view",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Calm, friendly view: hides tool rows and shows one plain-English checklist above the prompt, with progress, helpers, background work, a password guard and plan usage.",
   "author": {
     "name": "Antreas-Strb"

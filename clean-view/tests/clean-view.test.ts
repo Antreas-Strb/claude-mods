@@ -98,7 +98,7 @@ test('a to-do list plus a 60% report draws done, current, next and up next rows'
     expect(shown).toContain('60%')
     expect(shown).toContain('Next')
     expect(shown).toContain('Up next')
-    expect(shown).toContain('Clean View: ON')
+    expect(shown).toContain('Clean View: Simple')
   }
 })
 
@@ -123,7 +123,7 @@ test('/simple off hides the band but keeps the button', async ($, on) => {
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).not.toContain('Understand your request')
-    expect(shown).toContain('Clean View: OFF')
+    expect(shown).toContain('Clean View: Off')
   }
 })
 
@@ -442,11 +442,11 @@ test('token counts read short', () => {
 
 test('a new plan keeps the tokens already counted', () => {
   const old = [
-    { id: 'a', name: 'Understand your request', status: 'active', percent: 0, hasReported: false, size: 'M', tokens: 500, cachedTokens: 100 },
+    { id: 'a', name: 'Understand your request', status: 'active', percent: 0, hasReported: false, size: 'M', tokens: 500, cachedTokens: 100, startedAt: null, finishedAt: null },
   ] as const
   const next = [
-    { id: 'p0', name: 'Write the page', status: 'active', percent: 0, hasReported: false, size: 'M', tokens: 0, cachedTokens: 0 },
-    { id: 'p1', name: 'Check it', status: 'upcoming', percent: 0, hasReported: false, size: 'M', tokens: 0, cachedTokens: 0 },
+    { id: 'p0', name: 'Write the page', status: 'active', percent: 0, hasReported: false, size: 'M', tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null },
+    { id: 'p1', name: 'Check it', status: 'upcoming', percent: 0, hasReported: false, size: 'M', tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null },
   ] as const
   const carried = carryTokens([...old], [...next])
   expect(carried[0]?.tokens).toBe(500)
@@ -522,17 +522,17 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
   for (const surface of SURFACES) {
     const simple = (await texts($, surface, 120)).join('\n')
     expect(simple).toContain('Find the prices')
-    expect(simple).toContain('▸ Details')
+    expect(simple).toContain('Clean View: Simple')
     expect(simple).not.toContain('Haiku 4.5')
     expect(simple).not.toContain('tokens')
     expect(simple).not.toContain('Plan usage')
   }
 
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 120 }, surface: 'terminal' })
-  await ui.press({ key: 'details' })
+  await ui.press({ key: 'toggle' })
   await ui.unmount()
   const detailed = (await texts($, 'terminal', 120)).join('\n')
-  expect(detailed).toContain('▾ Details')
+  expect(detailed).toContain('Clean View: Details')
   expect(detailed).toContain('Explore · Haiku 4.5')
   expect(detailed).toContain('tokens')
   expect(detailed).toContain('Plan usage: 5-hour 42%')
@@ -558,4 +558,58 @@ test('a quick answer with no plan ends as one plain step', async ($, on) => {
   expect(shown).toContain('✓ All done')
   expect(shown).toContain('Answer your question')
   expect(shown).not.toContain('Plan the steps')
+})
+
+test('one button cycles Simple, Details and Off', async ($, on) => {
+  world(on)
+  const press = async () => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key: 'toggle' })
+    await ui.unmount()
+  }
+  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Simple')
+  await press()
+  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Details')
+  await press()
+  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Off')
+  await press()
+  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Simple')
+})
+
+test('in details, the current step fills gradually and shows its time; done steps show how long they took', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  await detailsOn($)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Read notes', 'Write copy'], sizes: ['M', 'M'] })
+
+  // No pace yet: a medium step is expected to take 3 minutes, so after 90 seconds it is about half done.
+  await clock.advance(90_000)
+  let shown = (await texts($, 'terminal', 120)).join('\n')
+  expect(shown).toContain('█████░░░░░')
+  expect(shown).toContain('50%')
+  expect(shown).toContain('1m 30s · ~2m left')
+  expect(shown).not.toContain('Working')
+
+  // The first step took 2 minutes; the second, the same size, is expected to take 2 minutes too.
+  await clock.advance(30_000)
+  await callTool($, { tool: PROGRESS, task: 'Read notes', percent: 100 })
+  await clock.advance(60_000)
+  shown = (await texts($, 'terminal', 120)).join('\n')
+  expect(shown).toContain('took 2m 0s')
+  expect(shown).toContain('50%')
+  expect(shown).toContain('1m 0s · ~1m left')
+})
+
+test('the simple view keeps the sweep until Claude reports', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Read notes', 'Write copy'] })
+  const shown = (await texts($, 'terminal', 120)).join('\n')
+  expect(shown).toContain('Working')
+  expect(shown).not.toContain('took')
 })

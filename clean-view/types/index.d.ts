@@ -14,6 +14,10 @@ export type CleanViewTask = {
   tokens: number
   /** Of those, the tokens read from the prompt cache. */
   cachedTokens: number
+  /** When the step became the current one; null while upcoming. */
+  startedAt: number | null
+  /** When it was checked off; null until then. */
+  finishedAt: number | null
 }
 
 /** `background`: Claude answered, but helpers or background tasks still run. */
