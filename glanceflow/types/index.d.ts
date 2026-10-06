@@ -71,6 +71,8 @@ export type GlanceChecklist = {
   activity: { label: string; count: number } | null
   /** The session's spend in US dollars when the job started; null where the host keeps no ledger. */
   costAtStart: number | null
+  /** How long one unit of step size took in this project's earlier finished jobs, in ms; null until History knows. */
+  paceMs: number | null
 }
 
 /** One plan window and how much of it is used. */
@@ -119,6 +121,9 @@ export type GlanceHistoryEntry = {
   isQuickAnswer: boolean
   /** What the job cost in US dollars; absent where the host keeps no ledger. */
   costUsd?: number | null
+  /** Size units of the steps it checked off (S 1, M 2, L 3), and the time they took in ms: the project's pace. */
+  doneUnits?: number
+  doneMs?: number
 }
 
 /** What the history pane shows: one day of one project. */

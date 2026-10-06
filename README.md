@@ -51,7 +51,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 ## What you get
 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
-- **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and, after two steps, about how long is left. A long plan says how many steps are out of view.
+- **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A long plan says how many steps are out of view.
 - **What Claude is doing right now:** a quiet line under the current step says it in plain words, like `Reading files (3)…` or `Running the tests…`. No file names or commands.
 - **Sounds, if you want them:** `/glanceflow sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glanceflow sound voice` also says it ("Claude needs you"). Off by default; macOS only for now.
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.

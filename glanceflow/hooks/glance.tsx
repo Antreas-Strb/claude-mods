@@ -12,6 +12,7 @@ import type {
 } from '../types'
 import {
   HISTORY_PREFIX,
+  SIZE_WEIGHT,
   clockTime,
   dayFromArgument,
   dayKey,
@@ -21,6 +22,7 @@ import {
   projectName,
   shiftDay,
   teamReport,
+  paceFromHistory,
   upsertEntry,
 } from './history'
 import { findSecrets, maskPrivate } from './privacy'
@@ -55,7 +57,6 @@ const RESEND_WINDOW_MS = 2 * 60 * 1000
 const LIMIT_WARN = 80
 const LIMIT_ALERT = 95
 const LONG_CHAT = 75
-const SIZE_WEIGHT: Record<GlanceTaskSize, number> = { S: 1, M: 2, L: 3 }
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly', spend_limit: 'spending' }
 
 const DENIED = 'you said no to a step, so Claude paused'
@@ -268,8 +269,10 @@ export function stampTimes(tasks: GlanceTask[], at: number): GlanceTask[] {
   })
 }
 
-// A step of size M is expected to take 3 minutes until this job's own pace is known.
+// A step of size M is expected to take 3 minutes until this job's or this project's pace is known.
 const DEFAULT_UNIT_MS = 90_000
+// The project's pace from History counts as much as this many units of this job's own finished steps.
+const PACE_WEIGHT = 2
 
 /**
  * How far along the current step looks: time spent against the time this job's finished steps took per
@@ -282,7 +285,9 @@ export function stepEstimate(list: GlanceChecklist, one: GlanceTask, at: number)
   )
   const units = done.reduce((sum, step) => sum + SIZE_WEIGHT[step.size], 0)
   const spent = done.reduce((sum, step) => sum + (step.finishedAt! - step.startedAt!), 0)
-  const expected = Math.max(10_000, (units > 0 ? spent / units : DEFAULT_UNIT_MS) * SIZE_WEIGHT[one.size])
+  const prior = list.paceMs === null ? 0 : PACE_WEIGHT
+  const unitMs = units + prior > 0 ? (spent + (list.paceMs ?? 0) * prior) / (units + prior) : DEFAULT_UNIT_MS
+  const expected = Math.max(10_000, unitMs * SIZE_WEIGHT[one.size])
   const elapsedMs = one.startedAt === null ? 0 : Math.max(0, at - one.startedAt)
   const estimate = Math.min(95, Math.round((100 * elapsedMs) / expected))
   const percent = Math.min(99, Math.max(one.hasReported ? one.percent : 0, estimate))
@@ -295,12 +300,21 @@ function leftLabel(ms: number): string {
   return ms < 60_000 ? '<1m left' : `~${formatLeft(ms)} left`
 }
 
-/** Time left at this job's own pace since the plan; nothing until two steps are done. */
+/**
+ * Time left at this job's own pace since the plan once two steps are done. Before that, the steps left at
+ * this project's usual pace from History; nothing when History doesn't know it yet.
+ */
 export function timeLeft(list: GlanceChecklist, at: number): number | null {
   const { doneCount, work } = overallProgress(list.tasks)
-  if (list.planAt === null || doneCount < 2 || work <= 0 || work >= 1) return null
+  if (list.planAt === null || work >= 1) return null
+  if (doneCount >= 2 && work > 0) return Math.round(((at - list.planAt) / work) * (1 - work))
+  if (list.paceMs === null) return null
 
-  return Math.round(((at - list.planAt) / work) * (1 - work))
+  return Math.round(
+    list.tasks
+      .filter(one => one.status !== 'done')
+      .reduce((sum, one) => sum + stepEstimate(list, one, at).leftMs, 0),
+  )
 }
 
 /**
@@ -538,6 +552,22 @@ const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | nul
   return next
 }
 
+/** This project's pace from the History of the last 30 days; null when it isn't known yet. */
+const learnPace = async ($: $): Promise<number | null> => {
+  try {
+    const project = await $.session.cwd()
+    const entries: GlanceHistoryEntry[] = []
+    for (const key of await $.store.keys()) {
+      const day = key.startsWith(HISTORY_PREFIX) ? await $.store.get(key) : null
+      if (Array.isArray(day)) entries.push(...(day as GlanceHistoryEntry[]))
+    }
+
+    return paceFromHistory(entries, project)
+  } catch {
+    return null
+  }
+}
+
 const startJob = async ($: $, text: string, jobId: string) => {
   const previous = await read($, checklistAtom)
   const list: GlanceChecklist = {
@@ -558,6 +588,7 @@ const startJob = async ($: $, text: string, jobId: string) => {
     stopKind: null,
     activity: null,
     costAtStart: (await read($, usageAtom)).costUsd,
+    paceMs: await learnPace($),
     // Work still running from the last job stays in view.
     helpers: (previous?.helpers ?? []).filter(one => one.status === 'running'),
   }
@@ -1222,7 +1253,10 @@ export function registerGlance(on: On): void {
       }
       const tasks = settle(steps.map((name, index) => task(name, 'upcoming', `plan#${index}`, sizeOf(sizes[index]))))
       const started = await now($)
+      const known = await read($, checklistAtom)
+      const paceMs = known === null ? await learnPace($) : known.paceMs
       await update($, checklistAtom, (list): GlanceChecklist => ({
+        paceMs: list?.paceMs ?? paceMs,
         planAt: list?.hasPlan ? (list.planAt ?? started) : started,
         plannedCount: list?.hasPlan ? list.plannedCount : steps.length,
         extraTokens: list?.extraTokens ?? 0,

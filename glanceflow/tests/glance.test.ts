@@ -1,10 +1,11 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
 import { activityOf, carryTokens, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
-import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, shiftDay, teamReport } from '../hooks/history'
+import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport } from '../hooks/history'
 
 const PLAN = 'mcp__glanceflow__plan_steps'
 const PROGRESS = 'mcp__glanceflow__report_progress'
@@ -1335,4 +1336,79 @@ test("once, GlanceFlow brings over Glance's settings and history; another mod's 
   expect(store.get('glanceEnabled')).toBeUndefined()
   expect(store.get('glanceCalm')).toBeUndefined()
   expect(reads).toHaveLength(2)
+})
+
+/** A finished job in History: `units` of step size that took `ms` in all. */
+function pastJob(jobId: string, project: string, units: number, ms: number, outcome: GlanceOutcome = 'done'): GlanceHistoryEntry {
+  return { jobId, project, startedAt: 1, finishedAt: 2, title: 'Earlier job', outcome, stepsDone: 2, stepsTotal: 2, newTokens: 0, cachedTokens: 0, doneSteps: [], openSteps: [], isQuickAnswer: false, doneUnits: units, doneMs: ms }
+}
+
+test("a project's pace comes from its finished jobs, once there is enough to go on", () => {
+  const site = '/work/landing-site'
+  expect(paceFromHistory([pastJob('a', site, 4, 240_000)], site)).toBeNull()
+  expect(
+    paceFromHistory(
+      [
+        pastJob('a', site, 4, 240_000),
+        pastJob('b', site, 4, 240_000),
+        pastJob('c', '/work/other', 8, 10),
+        pastJob('d', site, 8, 10, 'stopped'),
+      ],
+      site,
+    ),
+  ).toBe(60_000)
+})
+
+test("with this project's pace known, time left shows from the first step and leans toward this job's own pace", async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on, { 'history:2026-10-05': [pastJob('a', '/work/landing-site', 4, 240_000), pastJob('b', '/work/landing-site', 4, 240_000)] })
+  on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  // 1 + 2 + 2 + 3 = 8 units at this project's 1 minute a unit.
+  await callTool($, { tool: PLAN, steps: ['Read notes', 'Write copy', 'Add form', 'Polish it'], sizes: ['S', 'M', 'M', 'L'] })
+  expect((await texts($, 'terminal')).join('\n')).toContain('about 8m left')
+
+  // This job's first unit took 30s: (30s + 2 × 60s) / 3 = 50s a unit, × 7 units left ≈ 6m.
+  await clock.advance(30_000)
+  await callTool($, { tool: PROGRESS, task: 'Read notes', percent: 100 })
+  expect((await texts($, 'terminal')).join('\n')).toContain('about 6m left')
+})
+
+test('a finished job keeps the size and time of its steps, so the next job learns from it', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  const store = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: store.get(e.key) }) as never)
+  on('store.set', (_, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined } as never
+  })
+  on('store.delete', (_, e) => {
+    store.delete(e.key)
+    return { value: undefined } as never
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }) as never)
+  on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.Notification', () => ({}) as never)
+
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write copy', 'Polish it'], sizes: ['M', 'L'] })
+  await clock.advance(2 * 60_000)
+  await callTool($, { tool: PROGRESS, task: 'Write copy', percent: 100 })
+  await clock.advance(3 * 60_000)
+  await callTool($, { tool: PROGRESS, task: 'Polish it', percent: 100 })
+  await $.turn.complete({ turnId: 't1' } as never)
+
+  const saved = [...store.entries()].find(([key]) => key.startsWith('history:'))?.[1] as { doneUnits: number; doneMs: number }[]
+  expect(saved[0]?.doneUnits).toBe(5)
+  expect(saved[0]?.doneMs).toBe(5 * 60_000)
 })

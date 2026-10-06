@@ -1,9 +1,13 @@
 // The day's history of jobs, for a retro: pure functions, no engine calls.
 
-import type { GlanceChecklist, GlanceHistoryEntry, GlanceOutcome } from '../types'
+import type { GlanceChecklist, GlanceHistoryEntry, GlanceOutcome, GlanceTaskSize } from '../types'
 
 export const HISTORY_PREFIX = 'history:'
 export const HISTORY_DAYS = 30
+/** How much each step size counts toward progress and pace. */
+export const SIZE_WEIGHT: Record<GlanceTaskSize, number> = { S: 1, M: 2, L: 3 }
+// The project's pace is trusted once its finished jobs hold this many size units: about three medium steps.
+const MIN_PACE_UNITS = 6
 const DAY_MS = 24 * 60 * 60 * 1000
 
 function pad(value: number): string {
@@ -47,6 +51,9 @@ const OUTCOME: Record<GlanceChecklist['phase'], GlanceOutcome> = {
 export function entryFromChecklist(list: GlanceChecklist, project: string, costUsd: number | null = null): GlanceHistoryEntry {
   const tokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
   const cached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
+  const timed = list.hasPlan
+    ? list.tasks.filter(one => one.status === 'done' && one.startedAt !== null && one.finishedAt !== null && one.finishedAt > one.startedAt)
+    : []
 
   return {
     jobId: list.jobId,
@@ -63,7 +70,23 @@ export function entryFromChecklist(list: GlanceChecklist, project: string, costU
     openSteps: list.hasPlan ? list.tasks.filter(one => one.status !== 'done').map(one => one.name) : [],
     isQuickAnswer: !list.hasPlan,
     costUsd,
+    doneUnits: timed.reduce((sum, one) => sum + SIZE_WEIGHT[one.size], 0),
+    doneMs: timed.reduce((sum, one) => sum + (one.finishedAt! - one.startedAt!), 0),
   }
+}
+
+/** How long one unit of step size takes in this project, from its finished jobs; null until there is enough to go on. */
+export function paceFromHistory(entries: readonly GlanceHistoryEntry[], project: string): number | null {
+  let units = 0
+  let ms = 0
+  for (const one of entries) {
+    if (one.project === project && one.outcome === 'done' && (one.doneUnits ?? 0) > 0 && (one.doneMs ?? 0) > 0) {
+      units += one.doneUnits!
+      ms += one.doneMs!
+    }
+  }
+
+  return units >= MIN_PACE_UNITS ? Math.round(ms / units) : null
 }
 
 /** The day's entries with this one added, or replacing its earlier self. */
