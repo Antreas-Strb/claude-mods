@@ -24,6 +24,7 @@ import {
   projectName,
   shiftDay,
   teamReport,
+  weekSummary,
   paceFromHistory,
   upsertEntry,
 } from './history'
@@ -771,19 +772,21 @@ const showHistory = async ($: $, day: string, isOpening: boolean) => {
     .filter(key => key.startsWith(HISTORY_PREFIX))
     .map(key => key.slice(HISTORY_PREFIX.length))
   const days = [...new Set([today, day, ...saved])].sort().reverse()
-  const weekEntries: GlanceHistoryEntry[] = []
+  const myWeek: GlanceHistoryEntry[] = []
   for (let back = WEEK_DAYS - 1; back >= 0; back--) {
     const one = back === 0 ? stored : await $.store.get(`${HISTORY_PREFIX}${shiftDay(day, -back)}`)
-    if (Array.isArray(one)) weekEntries.push(...(one as GlanceHistoryEntry[]).filter(entry => entry.project === project))
+    if (Array.isArray(one)) myWeek.push(...(one as GlanceHistoryEntry[]))
   }
+  const filled = (one: GlanceHistoryEntry) => ({ ...one, doneSteps: one.doneSteps ?? [], openSteps: one.openSteps ?? [], isQuickAnswer: one.isQuickAnswer ?? false })
   await update($, historyAtom, view => ({
     day,
     project,
     entries,
     days,
     isReportShown: false,
-    reportSpan: view?.reportSpan ?? 'day',
-    weekEntries: weekEntries.map(one => ({ ...one, doneSteps: one.doneSteps ?? [], openSteps: one.openSteps ?? [], isQuickAnswer: one.isQuickAnswer ?? false })),
+    reportSpan: view?.reportSpan === 'week' ? 'week' : 'day',
+    weekEntries: myWeek.filter(one => one.project === project).map(filled),
+    myWeekEntries: myWeek.map(filled),
   }))
 
   return isOpening ? $.ui.open({ id: HISTORY_PANE, title: `History · ${projectName(project)}`, closeOnEscape: true }) : null
@@ -792,24 +795,31 @@ const showHistory = async ($: $, day: string, isOpening: boolean) => {
 /** Opens the whole plan in a side panel: every step, what each got done, its time and helpers. */
 const showPlan = ($: $) => $.ui.open({ id: PLAN_PANE, title: 'Plan', closeOnEscape: true })
 
-/** Switches the team report between the day and the week, and copies the new one. */
-const showReportSpan = async ($: $, span: 'day' | 'week', surface: RenderSurface) => {
+/** Shows the team report for the day or the week, or your own week across projects, and copies it. */
+const showReportSpan = async ($: $, span: GlanceHistoryView['reportSpan'], surface?: RenderSurface) => {
   await update($, historyAtom, view => (view ? { ...view, reportSpan: span } : view))
   const view = await read($, historyAtom)
   if (view !== null) await showReport($, true, reportOf(view), surface)
 }
 
 const reportOf = (view: GlanceHistoryView) =>
-  view.reportSpan === 'week' ? teamReport({ ...view, entries: view.weekEntries }, 'week') : teamReport(view)
+  view.reportSpan === 'mine'
+    ? weekSummary(view.myWeekEntries, view.day)
+    : view.reportSpan === 'week'
+      ? teamReport({ ...view, entries: view.weekEntries }, 'week')
+      : teamReport(view)
 
-const showReport = async ($: $, isShown: boolean, text: string, surface: RenderSurface) => {
+const showReport = async ($: $, isShown: boolean, text: string, surface?: RenderSurface) => {
   await update($, historyAtom, view => (view ? { ...view, isReportShown: isShown } : view))
   if (!isShown) return
   const copied = await $.ui.copy({ text, surface })
+  const isMine = (await read($, historyAtom))?.reportSpan === 'mine'
   $.ui.toast(
-    copied.isCopied
-      ? 'Team report copied: paste it into Slack, Teams or an email.'
-      : 'The report is in the panel: select it there to copy it.',
+    !copied.isCopied
+      ? 'The report is in the panel: select it there to copy it.'
+      : isMine
+        ? 'Your week copied: paste it wherever you like.'
+        : 'Team report copied: paste it into Slack, Teams or an email.',
   )
 }
 
@@ -1244,7 +1254,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, week, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1302,6 +1312,15 @@ export function registerGlance(on: On): void {
           ? 'Claude now shows its plan and waits: press Start, or tell Claude what to change.'
           : 'Claude starts right after laying out its plan.',
       }
+    }
+    if (arg === 'week') {
+      const opened = await showHistory($, dayKey(await now($)), true)
+      const view = await read($, historyAtom)
+      if (view === null) return { text: 'No history yet.' }
+      await showReportSpan($, 'mine')
+      const summary = weekSummary(view.myWeekEntries, view.day).split('\n')
+
+      return { text: opened?.isPlaced ? summary[2] ?? summary[0]! : summary.join('\n') }
     }
     if (arg.startsWith('history')) {
       const day = dayFromArgument(arg.slice('history'.length), await now($))
@@ -2240,7 +2259,7 @@ export function registerGlance(on: On): void {
           ))}
           <Box key="report-actions" flexDirection="row" gap={1} marginTop={1}>
             <Button key="copy" variant="primary" label="Copy report" onPress={() => showReport($, true, report, e.surface)} />
-            {view.reportSpan === 'week' ? (
+            {view.reportSpan === 'mine' ? null : view.reportSpan === 'week' ? (
               <Button key="span" label="This day" onPress={() => showReportSpan($, 'day', e.surface)} />
             ) : (
               <Button key="span" label="This week" onPress={() => showReportSpan($, 'week', e.surface)} />
@@ -2257,7 +2276,10 @@ export function registerGlance(on: On): void {
         <Box flexDirection="column" width={columns}>
           {picker}
           <Text dimColor>No tasks saved for this project on that day yet.</Text>
-          {close}
+          <Box key="actions" flexDirection="row" gap={1} marginTop={1}>
+            <Button key="mine" label="Your week" onPress={() => showReportSpan($, 'mine', e.surface)} />
+            {close}
+          </Box>
         </Box>
       )
     }
@@ -2322,7 +2344,13 @@ export function registerGlance(on: On): void {
           <Text bold wrap="truncate-end">{`Total: ${total}`}</Text>
         </Box>
         <Box key="actions" flexDirection="row" gap={1} marginTop={1}>
-          <Button key="report" variant="primary" label="Team report" onPress={() => showReport($, true, report, e.surface)} />
+          <Button
+            key="report"
+            variant="primary"
+            label="Team report"
+            onPress={() => showReportSpan($, view.reportSpan === 'week' ? 'week' : 'day', e.surface)}
+          />
+          <Button key="mine" label="Your week" onPress={() => showReportSpan($, 'mine', e.surface)} />
           {close}
         </Box>
       </Box>

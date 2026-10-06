@@ -213,3 +213,49 @@ export function teamReport(
 
   return lines.join('\n')
 }
+
+/** The weekday people say: "Tuesday", or the YYYY-MM-DD day where the runtime has no date names. */
+function weekday(day: string): string {
+  const [year, month, date] = day.split('-').map(Number)
+  try {
+    return new Date(year!, month! - 1, date!, 12).toLocaleDateString('en-GB', { weekday: 'long' })
+  } catch {
+    return day
+  }
+}
+
+/**
+ * A personal summary of the 7 days up to `day`, across every project: how many steps Claude checked off,
+ * in how many tasks, the time, the busiest day and the biggest tasks. Plain words, made to share.
+ */
+export function weekSummary(entries: readonly GlanceHistoryEntry[], day: string): string {
+  const jobs = entries.filter(one => !one.isQuickAnswer)
+  const heading = `Your week with Claude · ${shortDay(shiftDay(day, -(WEEK_DAYS - 1)))} to ${shortDay(day)}`
+  if (jobs.length === 0) {
+    return `${heading}\n\nNo planned work was recorded this week. Ask Claude for something with a few steps, and it shows here.`
+  }
+
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`
+  const steps = jobs.reduce((sum, one) => sum + one.doneSteps.length, 0)
+  const finished = jobs.filter(one => one.outcome === 'done').length
+  const time = jobs.reduce((sum, one) => sum + (one.finishedAt === null ? 0 : one.finishedAt - one.startedAt), 0)
+  const projects = new Set(jobs.map(one => one.project))
+  const perDay = new Map<string, number>()
+  for (const one of jobs) perDay.set(dayKey(one.startedAt), (perDay.get(dayKey(one.startedAt)) ?? 0) + 1)
+  const [busiest, busiestCount] = [...perDay].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]!
+  const biggest = [...jobs].filter(one => one.doneSteps.length > 0).sort((a, b) => b.doneSteps.length - a.doneSteps.length).slice(0, 3)
+
+  const lines = [
+    heading,
+    '',
+    `Claude checked off ${plural(steps, 'step', 'steps')} in ${plural(jobs.length, 'task', 'tasks')}, and finished ${finished} of them.`,
+    `Time at work: ${plainDuration(time)}${projects.size > 1 ? `, across ${projects.size} projects` : ''}.`,
+  ]
+  if (perDay.size > 1) lines.push(`Busiest day: ${weekday(busiest)}, with ${plural(busiestCount, 'task', 'tasks')}.`)
+  if (biggest.length > 0) {
+    lines.push('', 'Biggest tasks')
+    for (const one of biggest) lines.push(`• ${one.title} (${plural(one.doneSteps.length, 'step', 'steps')})`)
+  }
+
+  return lines.join('\n')
+}

@@ -149,10 +149,12 @@ export type GlanceHistoryView = {
   days: string[]
   /** True while the plain-English team report shows in place of the list. */
   isReportShown: boolean
-  /** Whether the team report covers the day or the 7 days up to it. */
-  reportSpan: 'day' | 'week'
+  /** The team report for the day or the 7 days up to it, or `mine`: your own week across every project. */
+  reportSpan: 'day' | 'week' | 'mine'
   /** This project's entries for the 7 days up to `day`, for the weekly report. */
   weekEntries: GlanceHistoryEntry[]
+  /** Every project's entries for the 7 days up to `day`, for your own weekly summary. */
+  myWeekEntries: GlanceHistoryEntry[]
 }
 
 declare module 'claude-code' {

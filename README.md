@@ -96,6 +96,21 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 
 ![The Team report: what got done, what is still in progress, what needs a decision, and the time spent](docs/glance-team-report.png)
 
+**Your week** (or `/glanceflow week`) is a short summary just for you, across every project: how many steps Claude checked off in how many tasks, the time at work, your busiest day and the biggest tasks. It covers the 7 days up to the day picked and is copied, ready to keep or share.
+
+```
+Your week with Claude · 30 Sept 2026 to 6 Oct 2026
+
+Claude checked off 23 steps in 9 tasks, and finished 7 of them.
+Time at work: 4 h 10 min, across 3 projects.
+Busiest day: Tuesday, with 4 tasks.
+
+Biggest tasks
+• Build the pricing page (6 steps)
+• Write the welcome email (4 steps)
+• Fix the contact form (3 steps)
+```
+
 <sub>The History panel and the Team report above are drawn by GlanceFlow from a sample day.</sub>
 
 ## Fresh chat (handoff)
@@ -112,6 +127,7 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glanceflow details on`, `/glanceflow details off` | Picks Details or Simple |
 | `/glanceflow history` | Shows today's jobs in this project |
 | `/glanceflow history yesterday`, `/glanceflow history 2026-10-06` | Shows another day |
+| `/glanceflow week` | Your week across every project, in a few lines, copied to share |
 | `/glanceflow pause`, `/glanceflow continue` | Pauses Claude, or picks the job up again |
 | `/glanceflow plan` | Opens the whole plan in a side panel |
 | `/glanceflow settings` | Opens the settings: view, sounds, desktop notices, calm mode, plan approval, password guard and when to tidy up |

@@ -5,7 +5,7 @@ import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
 import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
-import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport } from '../hooks/history'
+import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
 const PLAN = 'mcp__glanceflow__plan_steps'
 const PROGRESS = 'mcp__glanceflow__report_progress'
@@ -1596,6 +1596,62 @@ test('the weekly team report covers the 7 days up to the day picked, and This we
   expect(copied).not.toContain('Too old')
   expect(copied).toContain('2 of 2 tasks finished · 1 h of work')
   expect((await paneTexts($)).join('\n')).toContain('This day')
+})
+
+test('your week sums up every project: steps, tasks, time, the busiest day and the biggest tasks', async ($, on) => {
+  mock.clock(on, { now: new Date(2026, 9, 6, 18, 0).getTime() })
+  const job = (jobId: string, day: number, title: string, steps: number, project = '/work/landing-site') => ({
+    ...ENTRY,
+    jobId,
+    project,
+    startedAt: new Date(2026, 9, day, 9, 0).getTime(),
+    finishedAt: new Date(2026, 9, day, 9, 30).getTime(),
+    title,
+    outcome: 'done',
+    stepsDone: steps,
+    stepsTotal: steps,
+    doneSteps: Array.from({ length: steps }, (_, at) => `Step ${at + 1}`),
+    openSteps: [],
+  })
+  mock.store(on, {
+    'history:2026-10-06': [job('a', 6, 'Build the pricing section', 4), job('b', 6, 'Write the newsletter', 2, '/work/newsletter')],
+    'history:2026-10-02': [job('c', 2, 'Fix the contact form', 1), { ...job('q', 2, 'What time is it?', 0), isQuickAnswer: true }],
+    'history:2026-09-29': [job('d', 29 - 30, 'Too old for this week', 5)],
+  })
+  let copied = ''
+  on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.toast', () => undefined as never)
+  on('ui.copy', (_, e) => {
+    copied = e.text
+    return { value: { isCopied: true } } as never
+  })
+  const result = await $.command.run({ command: 'glanceflow', args: 'week' } as never)
+  expect(result.text).toBe('Claude checked off 7 steps in 3 tasks, and finished 3 of them.')
+  expect(copied).toMatch(/Your week with Claude · 30 Sept? 2026 to 6 Oct 2026/)
+  expect(copied).toContain('Time at work: 1 h 30 min, across 2 projects.')
+  expect(copied).toContain('Busiest day: Tuesday, with 2 tasks.')
+  expect(copied).toContain('• Build the pricing section (4 steps)')
+  expect(copied).toContain('• Write the newsletter (2 steps)')
+  expect(copied).not.toContain('Too old')
+  expect(copied).not.toContain('What time is it')
+  const shown = (await paneTexts($)).join('\n')
+  expect(shown).toContain('Your week with Claude')
+  expect(shown).not.toContain('This week')
+
+  // From the list, Your week shows it again.
+  const back = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await back.press({ key: 'back' })
+  await back.unmount()
+  copied = ''
+  const list = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await list.press({ key: 'mine' })
+  await list.unmount()
+  expect(copied).toContain('Claude checked off 7 steps in 3 tasks')
+})
+
+test('a week with no planned work says so plainly', () => {
+  expect(weekSummary([], '2026-10-06')).toContain('No planned work was recorded this week.')
 })
 
 test("the band says in one whole sentence what Claude is doing; the Plan says more", async ($, on) => {
