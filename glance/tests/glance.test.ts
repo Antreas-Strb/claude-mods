@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { carryTokens, cleanName, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { carryTokens, cleanName, fit, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, shiftDay, teamReport } from '../hooks/history'
 
@@ -862,6 +862,27 @@ test('a long plan says how many steps are out of view', async ($, on) => {
   await ui.unmount()
   expect(shown).toContain('… 2 earlier · 3 more steps')
   expect(shown).toContain('Four')
+})
+
+test('names in any script line up: CJK and emoji take two cells', () => {
+  expect(fit('Read notes', 12)).toBe('Read notes  ')
+  expect(fit('设计页面', 10)).toBe('设计页面  ')
+  expect(fit('设计页面设计', 9)).toBe('设计页面…')
+  expect(fit('设计页面设计', 8)).toBe('设计页… ')
+  expect(fit('Ship it 🚀', 10)).toBe('Ship it 🚀')
+  expect(fit('Διάβασε τις σημειώσεις', 10)).toBe('Διάβασε τ…')
+})
+
+test('with room for one row, the current step is the one shown', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['One', 'Two', 'Three', 'Four'] })
+  await callTool($, { tool: PROGRESS, task: 'One', percent: 100 })
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 3 }, surface: 'terminal' })
+  const shown = (await ui.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  await ui.unmount()
+  expect(shown).toContain('Two')
+  expect(shown).not.toContain('One ')
 })
 
 test('the band has History and Fresh chat buttons while Glance is on', async ($, on) => {

@@ -140,12 +140,44 @@ function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
-function fit(text: string, width: number): string {
+/** Terminal cells a character takes: two for CJK and emoji, none for joiners and accents. */
+function cellsOf(char: string): number {
+  const code = char.codePointAt(0) ?? 0
+  if (code === 0x200d || (code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return 0
+  const isWide =
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+
+  return isWide ? 2 : 1
+}
+
+/** Pads or trims text to exactly `width` terminal cells, so columns line up in any script. */
+export function fit(text: string, width: number): string {
   if (width <= 0) {
     return ''
   }
+  const chars = Array.from(text)
+  const total = chars.reduce((sum, char) => sum + cellsOf(char), 0)
+  if (total <= width) {
+    return text + ' '.repeat(width - total)
+  }
+  let kept = ''
+  let used = 0
+  for (const char of chars) {
+    const size = cellsOf(char)
+    if (used + size > width - 1) break
+    kept += char
+    used += size
+  }
 
-  return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text.padEnd(width)
+  return `${kept}…${' '.repeat(width - 1 - used)}`
 }
 
 function task(name: string, status: GlanceTask['status'], id = name, size: GlanceTaskSize = 'M'): GlanceTask {
@@ -1724,15 +1756,17 @@ export function registerGlance(on: On): void {
     // Window the lines so the current step (and what runs under it) stays in view,
     // and say how many steps are out of view.
     const focus = Math.max(0, lines.findIndex(one => one.isActive))
-    const windowAt = (size: number) => Math.min(Math.max(0, focus - 1), Math.max(0, lines.length - size))
+    // One line of context above the current step when there is room for it.
+    const windowAt = (size: number) => Math.min(Math.max(0, focus - (size > 2 ? 1 : 0)), Math.max(0, lines.length - size))
     const stepsIn = (from: number, to: number) => lines.slice(from, to).filter(one => one.key.startsWith('task-')).length
     const isCut = stepsIn(0, windowAt(room)) + stepsIn(windowAt(room) + room, lines.length) > 0
-    const shown = isCut ? Math.max(1, room - 1) : room
+    // The "more steps" line needs a row of its own; with a single row the current step wins.
+    const shown = isCut && room > 1 ? room - 1 : room
     const first = windowAt(shown)
     const above = stepsIn(0, first)
     const below = stepsIn(first + shown, lines.length)
     const rows = lines.slice(first, first + shown).map(one => one.element)
-    if (above + below > 0) {
+    if (above + below > 0 && shown < room) {
       const more = [above > 0 ? `${above} earlier` : '', below > 0 ? `${below} more ${below === 1 ? 'step' : 'steps'}` : '']
       rows.push(
         <Text key="more" dimColor wrap="truncate-end">
