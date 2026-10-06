@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, carryTokens, isContinueWords, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport } from '../hooks/history'
 
@@ -1248,12 +1248,12 @@ test('under the current step, what Claude is doing right now, in plain words', a
   await callTool($, { tool: 'Read', file_path: '/work/a.md' })
   await callTool($, { tool: 'Read', file_path: '/work/b.md' })
   let shown = (await texts($, 'terminal')).join('\n')
-  expect(shown).toContain('Reading files (2)…')
+  expect(shown).toContain('Reading files (2)')
   expect(shown).not.toContain('a.md')
 
   await callTool($, { tool: 'Bash', command: 'npm test' })
   shown = (await texts($, 'terminal')).join('\n')
-  expect(shown).toContain('Running the tests…')
+  expect(shown).toContain('Running the tests')
   expect(shown).not.toContain('Reading files')
 
   // A finished step starts the next one with a clean line.
@@ -1494,7 +1494,7 @@ test("a finished step's summary shows under it until Claude moves on, and code s
 
   await callTool($, { tool: 'Read', file_path: '/work/a.md' })
   shown = (await texts($, 'terminal')).join('\n')
-  expect(shown).toContain('Reading files…')
+  expect(shown).toContain('Reading files')
   expect(shown).not.toContain('Added a pricing table')
 })
 
@@ -1552,6 +1552,69 @@ test('the weekly team report covers the 7 days up to the day picked, and This we
   expect((await paneTexts($)).join('\n')).toContain('This day')
 })
 
+test("the band says in one whole sentence what Claude is doing; the Plan says more", async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Check the page', 'Fix the links'] })
+  await callTool($, { tool: 'Bash', command: 'npx playwright test --project=mobile', description: 'Check the page on a phone screen' })
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Now: Check the page on a phone screen')
+  expect(shown).not.toContain('playwright')
+  expect(shown).not.toContain('…')
+
+  // Too long for a narrow band: the short label instead of a cut sentence.
+  shown = (await texts($, 'terminal', 34)).join('\n')
+  expect(shown).toContain('Running the tests')
+  expect(shown).not.toContain('Now: Check')
+
+  // The Plan, in Details, adds what Claude runs.
+  await detailsOn($)
+  const pane = await planPaneTexts($)
+  expect(pane).toContain('Now: Check the page on a phone screen')
+  expect(pane).toContain('↳ npx playwright test --project=mobile')
+})
+
+test('the Plan shows long step names whole in a narrow panel', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Keep the product profile private', 'Load the social media guide'] })
+  const ui = await $.ui.mount({ ...PLAN_PANE, props: { ...PLAN_PANE.props, bodyColumns: 40 }, surface: 'terminal' })
+  const pane = (await ui.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  await ui.unmount()
+  expect(pane).toContain('Keep the product profile private')
+  expect(pane).toContain('Load the social media guide')
+  expect(pane).not.toContain('priva…')
+})
+
+test('a request in another language gets an English title', () => {
+  expect(isLatinText('Build my landing page')).toBe(true)
+  expect(isLatinText('Φτιάξε τη σελίδα μου')).toBe(false)
+  expect(isStartWords('Go ahead')).toBe(true)
+  expect(isStartWords('ξεκίνα')).toBe(true)
+  expect(isStartWords('change step two')).toBe(false)
+})
+
+test('with Approve the plan first on, Claude waits for Start before it works', async ($, on) => {
+  world(on)
+  const on_ = await $.command.run({ command: 'glanceflow', args: 'approve on' } as never)
+  expect(on_.text).toContain('waits')
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  const planned = await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  expect(String(planned.result)).toContain('wait for their reply')
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Read the plan, then press Start')
+  expect(shown).toContain('▶ Start')
+  const denied = await callTool($, { tool: 'Bash', command: 'ls' })
+  expect(denied.deny).toContain('not approved')
+
+  await $.turn.start({ text: 'The plan looks good. Please start.', turnId: 't2' })
+  const ran = await callTool($, { tool: 'Bash', command: 'ls' })
+  expect(ran.deny).toBeUndefined()
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('▶ Start')
+  expect(shown).toContain('Write the page')
+})
+
 const PLAN_PANE = {
   plugin: 'glanceflow',
   component: 'Pane',
@@ -1599,7 +1662,7 @@ test('▤ Plan opens the whole plan beside the chat: every step, what it got don
   for (const name of steps) expect(pane).toContain(name)
   expect(pane).toContain(' took 1m 30s')
   expect(pane).toContain('    Found your colors and tone of voice')
-  expect(pane).toContain('    Reading files…')
+  expect(pane).toContain('    Now: Reading files')
   expect(pane).toContain('1 of 8 steps done')
   // More than the band: when it started, the steps grouped, and how long each step still to come should take.
   expect(pane).toMatch(/Started \d\d:\d\d · 1m 30s so far/)

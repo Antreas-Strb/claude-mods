@@ -70,7 +70,16 @@ export type GlanceChecklist = {
   /** How a stopped job was stopped: Esc, or the Pause button. */
   stopKind: 'esc' | 'pause' | null
   /** What Claude is doing right now, in plain words ("Reading files"), and how many times in a row. */
-  activity: { label: string; count: number } | null
+  activity: {
+    label: string
+    count: number
+    /** Claude's own one-line description of the call, when it gave one. */
+    detail: string | null
+    /** What the call works on, for the Plan in Details: the command, a file's name or a site. */
+    target: string | null
+  } | null
+  /** Approve the plan first: `waiting` until the person presses Start; `approved` for the rest of the job. */
+  approval: 'none' | 'waiting' | 'approved'
   /** The session's spend in US dollars when the job started; null where the host keeps no ledger. */
   costAtStart: number | null
   /** How long one unit of step size took in this project's earlier finished jobs, in ms; null until History knows. */
@@ -164,6 +173,8 @@ declare module 'claude-code' {
       isCalm: boolean
       /** Password guard: a message that looks like it holds a password or key is held back until sent twice. */
       isGuarded: boolean
+      /** Approve the plan first: Claude lays out its plan and waits for Start or a change. */
+      approvePlan: boolean
       /** How full the chat gets, in percent, before the band offers to tidy it up; 0 never offers. */
       tidyAt: number
       /** When the last checkpoint was saved before tidying up; null when none was. */

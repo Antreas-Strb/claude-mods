@@ -46,6 +46,7 @@ const DETAIL_KEY = 'glanceDetail'
 const SOUND_KEY = 'glanceSound'
 const CALM_KEY = 'glanceCalm'
 const GUARD_KEY = 'glanceGuard'
+const APPROVE_KEY = 'glanceApprove'
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 // Below this width the mode button drops the name; below METER_MIN_COLUMNS the bars go, so step names keep their room.
@@ -77,6 +78,7 @@ const FAILING = 'a step keeps failing, Claude is trying another way'
 const PERMISSION = "Answer Claude's request in the chat"
 const QUESTION = "Answer Claude's question in the chat"
 const WAITING = 'Reply to Claude in the box below'
+const APPROVE = 'Read the plan, then press Start or tell Claude what to change'
 
 const enabledAtom = atom({ plugin: 'glanceflow', key: 'glanceEnabled' } as const, true)
 const detailAtom = atom({ plugin: 'glanceflow', key: 'detailLevel' } as const, 'simple')
@@ -87,6 +89,7 @@ const usageAtom = atom({ plugin: 'glanceflow', key: 'usage' } as const, NO_USAGE
 const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off')
 const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
 const guardAtom = atom({ plugin: 'glanceflow', key: 'isGuarded' } as const, true)
+const approveAtom = atom({ plugin: 'glanceflow', key: 'approvePlan' } as const, false)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
 const checkpointAtom = atom({ plugin: 'glanceflow', key: 'checkpointAt' } as const, null)
 const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
@@ -97,6 +100,10 @@ const handoffAtom = atom({ plugin: 'glanceflow', key: 'handoffState' } as const,
 const HANDOFF_CONFIRM_MS = 8000
 // What the Continue button sends, as the person's own words; turn.start knows it and keeps the job going.
 const CONTINUE_TEXT = 'Please continue where you left off.'
+// What the Start button sends when the person approves the plan.
+const START_TEXT = 'The plan looks good. Please start.'
+// The longest plain sentence Claude's own description of a tool call keeps.
+const MAX_DETAIL = 90
 const HANDOFF_PROMPT = `Write a handoff note so a brand-new chat can carry on this work without this conversation.
 Cover, briefly: the goal; what is already done; what is left, in order; decisions made and why; the files, commands
 or links that matter; and the very next step. Under 300 words, no preamble.
@@ -453,6 +460,33 @@ export function isContinueWords(text: string): boolean {
   )
 }
 
+/** A short "go ahead" the person typed: it approves the plan. */
+export function isStartWords(text: string): boolean {
+  const words = text.trim().toLowerCase().replace(/[.!…,;:]+$/g, '').replace(/\s+/g, ' ')
+  return /^(start|go|go ahead|ok|okay|yes|looks good|approved?|ξεκίνα|ξεκινα|ναι|οκ|εντάξει|ενταξει)( please)?$/.test(words)
+}
+
+/** True when the text has no letters outside the Latin alphabet, so it can stand as an English title. */
+export function isLatinText(text: string): boolean {
+  return !/(?!\p{Script=Latin})\p{L}/u.test(text)
+}
+
+/** What a tool call works on, for the Plan in Details: the command, a file's name or a site. */
+export function activityTarget(input: { command?: unknown; file_path?: unknown; notebook_path?: unknown; url?: unknown }): string | null {
+  if (typeof input.command === 'string' && input.command.trim()) {
+    return maskPrivate(input.command.trim().split('\n')[0]!).slice(0, 160)
+  }
+  const file = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : null
+  if (file) return file.split(/[\\/]/).pop() ?? null
+  if (typeof input.url === 'string') {
+    const host = /^[a-z]+:\/\/([^/]+)/i.exec(input.url)
+    return host ? host[1]! : null
+  }
+  return null
+}
+
+const widthOf = (text: string) => Array.from(text).reduce((sum, char) => sum + cellsOf(char), 0)
+
 export function ownWords(text: string): string {
   return text.replace(/<([A-Za-z][\w-]*)\b[^>]*>[\s\S]*?<\/\1>/g, ' ').trim()
 }
@@ -603,7 +637,8 @@ const learnPace = async ($: $): Promise<number | null> => {
 const startJob = async ($: $, text: string, jobId: string) => {
   const previous = await read($, checklistAtom)
   const list: GlanceChecklist = {
-    title: cleanName(text.split('\n')[0]),
+    // Until Haiku names it in English, a request in another language shows a neutral title.
+    title: isLatinText(text.split('\n')[0] ?? '') ? cleanName(text.split('\n')[0]) : 'Working on your request',
     phase: 'working',
     tasks: stampTimes([task('Understand your request', 'active'), task('Plan the steps', 'upcoming')], await now($)),
     needsYouReason: null,
@@ -619,6 +654,7 @@ const startJob = async ($: $, text: string, jobId: string) => {
     extraCachedTokens: 0,
     stopKind: null,
     activity: null,
+    approval: 'none',
     costAtStart: (await read($, usageAtom)).costUsd,
     paceMs: await learnPace($),
     // Work still running from the last job stays in view.
@@ -640,7 +676,8 @@ const nameJob = async ($: $, text: string, jobId: string) => {
       timeoutMs: 15000,
       prompt:
         'Name this request in 2 to 6 plain English words that start with a verb, ' +
-        'like "Build my landing page". No file names, code, quotes or punctuation. ' +
+        'like "Build my landing page". Always in English, even when the request is in another language. ' +
+        'No file names, code, quotes or punctuation. ' +
         `Reply with the name only.\n\nRequest:\n${text.slice(0, 2000)}`,
     })
     if (!answer.isAnswered) {
@@ -998,6 +1035,21 @@ const setGuard = async ($: $, isOn: boolean) => {
   await $.store.set(GUARD_KEY, isOn)
 }
 
+/** Approve the plan first: Claude lays out its plan, then waits for Start or a change. */
+const setApprove = async ($: $, isOn: boolean) => {
+  await update($, approveAtom, () => isOn)
+  await $.store.set(APPROVE_KEY, isOn)
+}
+
+/** The person approves the plan: the same job starts. */
+const startPlan = async ($: $) => {
+  try {
+    await $.prompt.submit({ text: START_TEXT, asUser: true })
+  } catch {
+    $.ui.toast("Couldn't start right now. Type: start")
+  }
+}
+
 /** Picks Simple, Details or Off directly, as the settings panel does. */
 const setView = async ($: $, view: 'simple' | 'detailed' | 'off') => {
   await update($, enabledAtom, () => view !== 'off')
@@ -1015,12 +1067,13 @@ const alertSample = async ($: $, mode: 'off' | 'chime' | 'voice') => {
   if (mode === 'voice') await $.audio.speak('Claude needs you').catch(() => undefined)
 }
 
-/** Back to how GlanceFlow starts: Simple, no sounds, calm off, password guard on, tidy up at 50%. */
+/** Back to how GlanceFlow starts: Simple, no sounds, calm off, password guard on, no plan approval, tidy up at 50%. */
 const resetSettings = async ($: $) => {
   await setView($, 'simple')
   await setSound($, 'off')
   await setCalm($, false)
   await setGuard($, true)
+  await setApprove($, false)
   await setTidyAt($, TIDY_AT_DEFAULT)
   $.ui.toast('Settings are back to their defaults.')
 }
@@ -1061,7 +1114,7 @@ const adoptGlanceStore = async ($: $) => {
   try {
     const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
     const dir = `${config}/plugins/store`
-    const settings = new Set([STORE_KEY, DETAIL_KEY, SOUND_KEY, CALM_KEY, GUARD_KEY])
+    const settings = new Set([STORE_KEY, DETAIL_KEY, SOUND_KEY, CALM_KEY, GUARD_KEY, APPROVE_KEY])
     const mine = new Set(await $.store.keys())
     for (const file of await $.fs.list(dir)) {
       if (!/^glance_.*\.json$/.test(file.name)) {
@@ -1100,6 +1153,8 @@ export function registerGlance(on: On): void {
     isCalmMode = (await $.store.get(CALM_KEY)) === true
     const isGuarded = (await $.store.get(GUARD_KEY)) !== false
     await update($, guardAtom, () => isGuarded)
+    const approves = (await $.store.get(APPROVE_KEY)) === true
+    await update($, approveAtom, () => approves)
     const tidyAt = await $.store.get(TIDY_KEY)
     await update($, tidyAtAtom, () => (typeof tidyAt === 'number' ? tidyAt : TIDY_AT_DEFAULT))
     const saved = (await $.store.get(CHECKPOINT_KEY)) as { sessionId?: string; at?: number } | undefined
@@ -1151,7 +1206,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, guard on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, guard on|off, approve on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1188,6 +1243,16 @@ export function registerGlance(on: On): void {
         text: isOn
           ? 'The password guard is on: a message that looks like it has a password or key in it is held back.'
           : 'The password guard is off: every message is sent as you write it.',
+      }
+    }
+    if (arg.startsWith('approve')) {
+      const choice = arg.slice('approve'.length).trim()
+      const isOn = choice === 'on' ? true : choice === 'off' ? false : !(await read($, approveAtom))
+      await setApprove($, isOn)
+      return {
+        text: isOn
+          ? 'Claude now shows its plan and waits: press Start, or tell Claude what to change.'
+          : 'Claude starts right after laying out its plan.',
       }
     }
     if (arg.startsWith('history')) {
@@ -1393,7 +1458,10 @@ export function registerGlance(on: On): void {
     runningTurn = e.turnId
     const text = ownWords(e.text)
     const current = await read($, checklistAtom)
-    if (current !== null && (text === CONTINUE_TEXT || (isContinueWords(text) && current.phase !== 'done'))) {
+    if (current !== null && current.approval === 'waiting' && (text === START_TEXT || isStartWords(text))) {
+      // Start, or "go ahead" typed: the plan is approved and the same job goes on.
+      await change($, list => ({ ...list, approval: 'approved', phase: 'working', needsYouReason: null, isCollapsed: false }))
+    } else if (current !== null && (text === CONTINUE_TEXT || (isContinueWords(text) && current.phase !== 'done'))) {
       // The Continue button, or "continue" typed: the same job picks up again.
       await change($, list => ({
         ...list,
@@ -1451,6 +1519,7 @@ export function registerGlance(on: On): void {
         extraCachedTokens: list?.extraCachedTokens ?? 0,
         stopKind: null,
         activity: null,
+        approval: list?.approval ?? 'none',
         costAtStart: list?.costAtStart ?? null,
         title: list?.title ?? 'Working on it',
         startedAt: list?.startedAt ?? started,
@@ -1465,6 +1534,14 @@ export function registerGlance(on: On): void {
         helpers: list?.helpers ?? [],
       }))
       syncTicker($, await read($, checklistAtom))
+      if ((await read($, approveAtom)) && (await read($, checklistAtom))?.approval !== 'approved') {
+        await change($, list => ({ ...list, approval: 'waiting', phase: 'needsYou', needsYouReason: APPROVE }))
+        return {
+          result:
+            `Planned ${steps.length} steps. The person approves plans before work starts: stop now and wait for their reply. ` +
+            'Do not use other tools yet. If they ask for changes, lay out the new plan with plan_steps.',
+        }
+      }
 
       return { result: `Planned ${steps.length} steps. The first one has started.` }
     }
@@ -1497,6 +1574,10 @@ export function registerGlance(on: On): void {
       }
     }
 
+    if (isEnabled && list?.approval === 'waiting' && !ALWAYS_ALLOWED.has(tool)) {
+      return { deny: 'The person has not approved the plan yet. Stop and wait for their reply.' }
+    }
+
     if (tool === 'AskUserQuestion') {
       await setNeedsYou($, QUESTION)
     } else if (list?.phase === 'needsYou') {
@@ -1505,10 +1586,18 @@ export function registerGlance(on: On): void {
     // What Claude is doing right now, in plain words, under the current step.
     const doing = activityOf(tool, e as unknown as { command?: unknown })
     if (doing !== null && list !== null) {
+      const input = e as unknown as { description?: unknown; command?: unknown; file_path?: unknown; notebook_path?: unknown; url?: unknown }
+      // Claude's own one-line description of the call, when it gave one: a fuller sentence than the label.
+      const detail = typeof input.description === 'string' && input.description.trim() ? cleanName(input.description, MAX_DETAIL) : null
+      const target = activityTarget(input)
       await change($, current => ({
         ...current,
-        activity:
-          current.activity?.label === doing ? { label: doing, count: current.activity.count + 1 } : { label: doing, count: 1 },
+        activity: {
+          label: doing,
+          count: current.activity?.label === doing ? current.activity.count + 1 : 1,
+          detail,
+          target,
+        },
       }))
     }
 
@@ -1646,7 +1735,9 @@ export function registerGlance(on: On): void {
         await change($, current => ({ ...current, phase: 'stopped', stopKind: 'esc', needsYouReason: null, finishedAt: finished }))
       } else if (list.hasPlan && hasUnfinishedWork(list.tasks)) {
         // A helper still running means Claude waits for it, not for the person.
-        await change($, current => (isBusy(current) ? current : { ...current, phase: 'needsYou', needsYouReason: WAITING }))
+        await change($, current =>
+          isBusy(current) ? current : { ...current, phase: 'needsYou', needsYouReason: current.approval === 'waiting' ? APPROVE : WAITING },
+        )
       } else {
         await change($, current => ({
           ...current,
@@ -1695,6 +1786,7 @@ export function registerGlance(on: On): void {
     const sound = await read($, soundAtom)
     const isCalm = await read($, calmAtom)
     const isGuarded = await read($, guardAtom)
+    const approves = await read($, approveAtom)
     const tidyAt = await read($, tidyAtAtom)
     const checkpointAt = await read($, checkpointAtom)
     const usage = await read($, usageAtom)
@@ -1775,6 +1867,15 @@ export function registerGlance(on: On): void {
           isCalm ? 'On' : 'Off',
           choice('calm', [['off', 'Off'], ['on', 'On']], isCalm ? 'on' : 'off', value => setCalm($, value === 'on')),
           isCalm ? 'Nothing on screen moves, and statuses read in bold.' : 'Bars and spinners move while Claude works. Turn on for a still screen.',
+        )}
+        {group(
+          'approve',
+          'Approve the plan first',
+          approves ? 'On' : 'Off',
+          choice('approve', [['off', 'Off'], ['on', 'On']], approves ? 'on' : 'off', value => setApprove($, value === 'on')),
+          approves
+            ? 'Claude shows its plan and waits. Press ▶ Start, or tell Claude what to change.'
+            : 'Claude starts right after laying out its plan.',
         )}
         {group(
           'guard',
@@ -1875,13 +1976,33 @@ export function registerGlance(on: On): void {
 
     // One row per step: mark, name, then its time; the time column lines up across rows.
     const nameWidth = Math.max(12, Math.min(MAX_NAME, columns - 24))
-    const row = (key: string, mark: RenderChildren, name: RenderChildren, time: string, timeIsDim = true) => (
-      <Box key={key} flexDirection="row">
-        {mark}
-        {name}
-        <Text dimColor={timeIsDim} wrap="truncate-end">{` ${fit(time, Math.max(0, columns - 3 - nameWidth)).trimEnd()}`}</Text>
-      </Box>
-    )
+    // A name or time too long for its column goes on lines of its own, in full, instead of being cut.
+    const row = (key: string, mark: RenderChildren, name: string, look: { bold?: boolean; dim?: boolean }, time: string, timeIsDim = true) =>
+      widthOf(name) <= nameWidth && widthOf(time) < columns - 3 - nameWidth ? (
+        <Box key={key} flexDirection="row">
+          {mark}
+          <Text bold={look.bold} dimColor={look.dim}>
+            {fit(name, nameWidth)}
+          </Text>
+          <Text dimColor={timeIsDim}>{` ${time}`}</Text>
+        </Box>
+      ) : (
+        <Box key={key} flexDirection="column">
+          <Box flexDirection="row">
+            {mark}
+            <Box flexShrink={1}>
+              <Text bold={look.bold} dimColor={look.dim} wrap="wrap">
+                {name}
+              </Text>
+            </Box>
+          </Box>
+          {time !== '' && (
+            <Text dimColor={timeIsDim} wrap="wrap">
+              {`  ${time}`}
+            </Text>
+          )}
+        </Box>
+      )
     const note = (key: string, text: string) => (
       <Text key={key} dimColor wrap="wrap">
         {`    ${text}`}
@@ -1908,7 +2029,7 @@ export function registerGlance(on: On): void {
       if (one.status === 'done') {
         const took = one.startedAt !== null && one.finishedAt !== null ? `took ${formatDuration(one.finishedAt - one.startedAt)}` : 'done'
         done.push(
-          row(key, <Text color="green">✓ </Text>, <Text>{fit(one.name, nameWidth)}</Text>, [took, tokensOf(one)].filter(Boolean).join(' · ')),
+          row(key, <Text color="green">✓ </Text>, one.name, {}, [took, tokensOf(one)].filter(Boolean).join(' · ')),
           ...(one.summary ? [note(`${key}-summary`, one.summary)] : []),
           ...helperRows(one),
         )
@@ -1916,17 +2037,24 @@ export function registerGlance(on: On): void {
         const estimate = stepEstimate(list, one, at)
         const time = [isDetailed ? `${estimate.percent}%` : '', formatDuration(estimate.elapsedMs), leftLabel(estimate.leftMs)].filter(Boolean).join(' · ')
         now_.push(
-          row(key, <Text color="cyan">▶ </Text>, <Text bold>{fit(one.name, nameWidth)}</Text>, time, false),
+          row(key, <Text color="cyan">▶ </Text>, one.name, { bold: true }, time, false),
           ...(tokensOf(one) ? [note(`${key}-tokens`, `${tokensOf(one)} so far`)] : []),
+          // The Plan says more than the band: Claude's own words for what it is doing, and in Details what it runs.
           ...(list.phase === 'working' && list.activity !== null
-            ? [note(`${key}-activity`, `${list.activity.label}${list.activity.count > 1 ? ` (${list.activity.count})` : ''}…`)]
+            ? [
+                note(
+                  `${key}-activity`,
+                  `Now: ${list.activity.detail ?? list.activity.label}${list.activity.count > 1 ? ` (${list.activity.label.toLowerCase()}, ${list.activity.count} in a row)` : ''}`,
+                ),
+                ...(isDetailed && list.activity.target ? [note(`${key}-target`, `↳ ${list.activity.target}`)] : []),
+              ]
             : []),
           ...helperRows(one),
         )
       } else {
         const expected = stepEstimate(list, one, at).leftMs
         next_.push(
-          row(key, <Text dimColor>○ </Text>, <Text dimColor>{fit(one.name, nameWidth)}</Text>, expected < 60_000 ? 'under a minute' : `about ${formatLeft(expected)}`),
+          row(key, <Text dimColor>○ </Text>, one.name, { dim: true }, expected < 60_000 ? 'under a minute' : `about ${formatLeft(expected)}`),
           ...helperRows(one),
         )
       }
@@ -2173,6 +2301,7 @@ export function registerGlance(on: On): void {
     const actions = isEnabled ? (
       <Box key="actions" flexDirection="row" gap={columns < 44 ? 1 : 2}>
         {canPause && <Button key="pause" plain label="‖ Pause" onPress={() => pauseJob($)} />}
+        {list0?.approval === 'waiting' && <Button key="start" plain label="▶ Start" onPress={() => startPlan($)} />}
         {canContinue && <Button key="continue" plain label="▶ Continue" onPress={() => continueJob($)} />}
         {list0?.hasPlan && <Button key="plan" plain label="▤ Plan" onPress={() => showPlan($)} />}
         <Button key="history" plain label="☰ History" onPress={() => showHistory($, dayKey(current), true)} />
@@ -2528,14 +2657,17 @@ export function registerGlance(on: On): void {
         })
         // What Claude is doing right now, in plain words.
         if (list.phase === 'working' && list.activity !== null) {
-          const { label, count } = list.activity
+          const { label, count, detail } = list.activity
+          const plain = `${label}${count > 1 ? ` (${count})` : ''}`
+          // Claude's own sentence when it fits the line whole; otherwise the short plain label, never a cut sentence.
+          const sentence = detail !== null && widthOf(`    Now: ${detail}`) <= columns - 1 ? `Now: ${detail}` : plain
           lines.push({
             key: 'activity',
             isActive: false,
             element: (
               <Box key="activity" flexDirection="row">
                 <Text dimColor wrap="truncate-end">
-                  {fit(`    ${label}${count > 1 ? ` (${count})` : ''}…`, Math.max(0, columns - 1)).trimEnd()}
+                  {fit(`    ${sentence}`, Math.max(0, columns - 1)).trimEnd()}
                 </Text>
               </Box>
             ),

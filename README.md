@@ -51,8 +51,9 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 ## What you get
 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
+- **Approve the plan first (optional):** turn it on in ⚙ Settings or with `/glanceflow approve on`, and Claude shows its plan and waits. Press **▶ Start**, or tell Claude what to change and it lays out a new plan.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A plan of more than five steps folds its finished steps, and the steps after the next one, into a line each; **▤ Plan** shows them all.
-- **What Claude is doing right now:** a quiet line under the current step says it in plain words, like `Reading files (3)…` or `Running the tests…`. No file names or commands.
+- **What Claude is doing right now:** a quiet line under the current step says it in one whole sentence: Claude's own description when it fits, like `Now: Check the page on a phone screen`, otherwise a short phrase like `Reading files (3)` or `Running the tests`. No file names or commands.
 - **What each step got done:** when a step is checked off, Claude adds one plain-English line on what it did ("Added a pricing table with three plans"). It shows under the step until Claude moves on, and goes into the History and the Team report.
 - **Sounds, if you want them:** `/glanceflow sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glanceflow sound voice` also says it ("Claude needs you"). Off by default (turn it on in ⚙ Settings); macOS only for now.
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
@@ -72,13 +73,13 @@ Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Contin
 
 ## The whole plan
 
-**▤ Plan** under the checklist (or `/glanceflow plan`) opens the whole plan in a side panel, with what the checklist has no room for: when the job started and about when it will be done, every step however long the plan, what each finished step got done and how long it took, about how long each step still to come should take, what Claude is doing now, and every helper. In Details it adds tokens per step, the job's cost and plan usage. It stays live while Claude works, so the checklist above the prompt can stay short.
+**▤ Plan** under the checklist (or `/glanceflow plan`) opens the whole plan in a side panel, with what the checklist has no room for: when the job started and about when it will be done, every step however long the plan, with long names shown whole, what each finished step got done and how long it took, about how long each step still to come should take, what Claude is doing now in its own words, and every helper. In Details it adds the command or file Claude is working on, tokens per step, the job's cost and plan usage. It stays live while Claude works, so the checklist above the prompt can stay short.
 
 ![The Plan panel: every step with what it got done, its time, and what Claude is doing now](docs/glanceflow-plan.png)
 
 ## Settings
 
-**⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), calm mode, the password guard, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
+**⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), calm mode, whether to approve the plan first, the password guard, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
 
 ![The settings panel: view, sounds, calm mode, password guard and when to tidy up](docs/glanceflow-settings.png)
 
@@ -112,7 +113,7 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glanceflow history yesterday`, `/glanceflow history 2026-10-06` | Shows another day |
 | `/glanceflow pause`, `/glanceflow continue` | Pauses Claude, or picks the job up again |
 | `/glanceflow plan` | Opens the whole plan in a side panel |
-| `/glanceflow settings` | Opens the settings: view, sounds, calm mode, password guard and when to tidy up |
+| `/glanceflow settings` | Opens the settings: view, sounds, calm mode, plan approval, password guard and when to tidy up |
 | `/glanceflow tidy` | Saves a checkpoint, then tidies up the chat |
 | `/glanceflow tidy at 60`, `/glanceflow tidy off` | When the checklist offers to tidy up |
 | `/glanceflow handoff` | Starts a fresh chat from a handoff note |
@@ -120,6 +121,7 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glanceflow sound on`, `/glanceflow sound voice`, `/glanceflow sound off` | A chime (and words) when Claude needs you, gets stuck or finishes a long job |
 | `/glanceflow calm on`, `/glanceflow calm off` | Nothing moves; statuses in bold |
 | `/glanceflow guard on`, `/glanceflow guard off` | Turns the password guard on or off |
+| `/glanceflow approve on`, `/glanceflow approve off` | Claude waits for ▶ Start before it works, or starts right away |
 
 The button above the prompt cycles Simple, Details and Off.
 
@@ -128,7 +130,7 @@ The button above the prompt cycles Simple, Details and Off.
 - The Desktop app draws its own one-line tool summary ("Used 3 tools"); a mod can't hide it.
 - Pattern matching can't catch every secret written in plain words.
 - Background tasks are checked at the end of each of Claude's replies.
-- Each new job gets a short name from Haiku in the background: one small model request per job.
+- Each new job gets a short English name from Haiku in the background: one small model request per job.
 
 ## Credits
 
