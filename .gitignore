@@ -2,3 +2,4 @@
 */.claude-plugin/types/
 */tsconfig.json
 .DS_Store
+brag-output*/

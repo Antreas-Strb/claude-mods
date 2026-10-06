@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, carryTokens, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, carryTokens, isContinueWords, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport } from '../hooks/history'
 
@@ -287,7 +287,7 @@ test('a nearly used-up limit and a long chat show gentle warnings', async ($, on
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).toContain("You've used 85% of your 5-hour limit")
-    expect(shown).toContain('This chat is getting long')
+    expect(shown).toContain('This chat is 80% full')
     expect(shown).toContain('Tidy it up')
   }
 
@@ -858,11 +858,32 @@ test('a long plan says how many steps are out of view', async ($, on) => {
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   await callTool($, { tool: PLAN, steps: ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight'] })
   await callTool($, { tool: PROGRESS, task: 'Three', percent: 100 })
-  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 6 }, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 4 }, surface: 'terminal' })
   const shown = (await ui.findAll({ type: 'Text' })).map(one => one.text).join('\n')
   await ui.unmount()
-  expect(shown).toContain('… 2 earlier · 3 more steps')
+  expect(shown).toContain('… 3 earlier · 4 more steps')
   expect(shown).toContain('Four')
+})
+
+test('a long plan folds its finished steps and the ones after next, so the band stays short', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight'] })
+  await callTool($, { tool: PROGRESS, task: 'Three', percent: 100, summary: 'Wrote the three sections' })
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('3 steps done')
+  expect(shown).toContain('    Wrote the three sections')
+  expect(shown).toContain('Four')
+  expect(shown).toContain('Five')
+  expect(shown).toContain('3 more steps')
+  for (const hidden of ['One', 'Two', 'Six', 'Seven', 'Eight']) expect(shown).not.toMatch(new RegExp(`^${hidden}\\b`, 'm'))
+
+  // Five steps or fewer stay as they are.
+  await $.turn.start({ text: 'Fix the menu', turnId: 't2' })
+  await callTool($, { tool: PLAN, steps: ['A1', 'B2', 'C3', 'D4', 'E5'] })
+  await callTool($, { tool: PROGRESS, task: 'B2', percent: 100 })
+  const short = (await texts($, 'terminal')).join('\n')
+  for (const name of ['A1', 'B2', 'C3', 'D4', 'E5']) expect(short).toContain(name)
 })
 
 test('names in any script line up: CJK and emoji take two cells', () => {
@@ -1036,6 +1057,9 @@ test('Pause stops the running turn; Continue picks the same job up without typin
   expect(shown).toContain('‖ Paused · ')
   expect(shown).toContain('▶ Continue')
   expect(shown).not.toContain('‖ Pause\n')
+  // The step itself says it is paused, not working.
+  expect(shown).toContain('\nPaused ')
+  expect(shown).not.toContain('\nWorking')
 
   await press('continue')
   expect(sent).toBe('Please continue where you left off.')
@@ -1485,4 +1509,274 @@ test('the weekly team report covers the 7 days up to the day picked, and This we
   expect(copied).not.toContain('Too old')
   expect(copied).toContain('2 of 2 tasks finished · 1 h of work')
   expect((await paneTexts($)).join('\n')).toContain('This day')
+})
+
+const PLAN_PANE = {
+  plugin: 'glanceflow',
+  component: 'Pane',
+  requestId: 'glanceflow-plan',
+  props: { title: 'Plan', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+} as const
+
+async function planPaneTexts($: Engine): Promise<string> {
+  const ui = await $.ui.mount({ ...PLAN_PANE, surface: 'terminal' })
+  const found = [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Button' }))].map(one => one.text)
+  await ui.unmount()
+
+  return found.join('\n')
+}
+
+test('▤ Plan opens the whole plan beside the chat: every step, what it got done, its time and what Claude is doing', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const opened: string[] = []
+  on('ui.open', (_, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } } as never
+  })
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('classic.Notification', () => ({}) as never)
+
+  expect(await planPaneTexts($)).toContain('No plan yet')
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  const steps = ['Read notes', 'Write copy', 'Add pricing', 'Add form', 'Add footer', 'Add menu', 'Check phones', 'Ship it']
+  await callTool($, { tool: PLAN, steps })
+  await clock.advance(90_000)
+  await callTool($, { tool: PROGRESS, task: 'Read notes', percent: 100, summary: 'Found your colors and tone of voice' })
+  await callTool($, { tool: 'Read', file_path: '/work/copy.md' })
+
+  // The band keeps to its rows; the panel has room for every step.
+  const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 6 }, surface: 'terminal' })
+  await band.press({ key: 'plan' })
+  await band.unmount()
+  expect(opened).toEqual(['glanceflow-plan'])
+
+  const pane = await planPaneTexts($)
+  for (const name of steps) expect(pane).toContain(name)
+  expect(pane).toContain(' took 1m 30s')
+  expect(pane).toContain('    Found your colors and tone of voice')
+  expect(pane).toContain('    Reading files…')
+  expect(pane).toContain('1 of 8 steps done')
+  // More than the band: when it started, the steps grouped, and how long each step still to come should take.
+  expect(pane).toMatch(/Started \d\d:\d\d · 1m 30s so far/)
+  expect(pane).toContain('Done\n')
+  expect(pane).toContain('Now\n')
+  expect(pane).toContain('Next\n')
+  expect(pane).toContain(' about 2m')
+
+  // In Details, the same percentage as the band, tokens per step, and what Claude needs from you.
+  await $.command.run({ command: 'glanceflow', args: 'details on' } as never)
+  await clock.advance(60_000)
+  await callTool($, { tool: 'mcp__glanceflow__report_progress', task: 'Write copy', percent: 100 })
+  await clock.advance(30_000)
+  await callTool($, { tool: 'mcp__glanceflow__report_progress', task: 'Add pricing', percent: 40 })
+  const band40 = (await texts($, 'terminal')).join('\n')
+  const percent = /· (\d+)% ·/.exec(band40)?.[1]
+  const details = await planPaneTexts($)
+  expect(details).toContain(` ${percent}% · 2 of 8 steps done`)
+  // Time left follows the percentage shown, so band and panel agree.
+  const bandLeft = /about (\S+) left/.exec(band40)?.[1]
+  expect(bandLeft).toBeDefined()
+  expect(details).toContain(`about ${bandLeft} left`)
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  expect(await planPaneTexts($)).toContain("Needs you: Answer Claude's request in the chat")
+  const desktop = await $.ui.mount({ ...PLAN_PANE, surface: 'desktop' })
+  expect((await desktop.findAll({ type: 'Text' })).map(one => one.text).join('\n')).toContain('Ship it')
+  await desktop.unmount()
+
+  const result = await $.command.run({ command: 'glanceflow', args: 'plan' } as never)
+  expect(result.text).toBe('The plan is in the side panel.')
+  expect(opened).toHaveLength(2)
+})
+
+test('"continue" typed after Esc picks the same job up; a new request starts a new one', async ($, on) => {
+  world(on)
+  expect(['continue', 'Continue.', 'go on', 'keep going', 'please continue', 'Συνέχισε', 'συνέχισε παρακαλώ', 'προχώρα'].every(isContinueWords)).toBe(true)
+  expect(['continue with the footer', 'add a menu', 'συνέχισε με το μενού'].some(isContinueWords)).toBe(false)
+
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it', 'Ship it'] })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('■ Stopped')
+  expect(shown).toContain('\nStopped')
+
+  await $.turn.start({ text: 'συνέχισε', turnId: 't2' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Build my landing page')
+  expect(shown).toContain('Write the page')
+  expect(shown).not.toContain('Stopped')
+
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' })
+  await $.turn.start({ text: 'Add a contact form', turnId: 't3' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('Write the page')
+})
+
+test('the step Claude waits on says Waiting', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Needs you')
+  expect(shown).toContain('\nWaiting')
+  expect(shown).not.toContain('\nWorking')
+})
+
+test('in Simple the percentage moves with time before a step is checked off', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  expect((await texts($, 'terminal')).join('\n')).toContain(' · 0% · ')
+  await clock.advance(90_000)
+  const percent = Number(/ · (\d+)% · /.exec((await texts($, 'terminal')).join('\n'))?.[1])
+  expect(percent).toBeGreaterThan(0)
+  expect(percent).toBeLessThan(50)
+})
+
+test('in a narrow window the button gets short and the bars go before step names do', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Read your brand notes', 'Build the pricing section'] })
+  const wide = (await texts($, 'terminal', 80)).join('\n')
+  expect(wide).toContain('● GlanceFlow: Simple')
+  expect(wide).toContain('░░░░░░░░░░')
+
+  const narrow = (await texts($, 'terminal', 36)).join('\n')
+  expect(narrow).toContain('● Simple')
+  expect(narrow).not.toContain('GlanceFlow: Simple')
+  expect(narrow).not.toContain('░░░░')
+  expect(narrow).toContain('Read your brand notes')
+})
+
+test('⚙ Settings opens one panel for the view, sounds and calm mode, each with a line on what it does', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const opened: string[] = []
+  const played: string[] = []
+  on('ui.open', (_, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } } as never
+  })
+  on('audio.play', (_, e) => {
+    played.push(String((e.clip as { asset?: string }).asset))
+    return { value: undefined } as never
+  })
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  const SETTINGS = {
+    plugin: 'glanceflow',
+    component: 'Pane',
+    requestId: 'glanceflow-settings',
+    props: { title: 'Settings', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  } as const
+  const settingsTexts = async () => {
+    const ui = await $.ui.mount({ ...SETTINGS, surface: 'terminal' })
+    const found = [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Button' }))].map(one => one.text).join('\n')
+    await ui.unmount()
+    return found
+  }
+  const pick = async (key: string) => {
+    const ui = await $.ui.mount({ ...SETTINGS, surface: 'terminal' })
+    await ui.press({ key })
+    await ui.unmount()
+  }
+
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await band.press({ key: 'settings' })
+  await band.unmount()
+  expect(opened).toEqual(['glanceflow-settings'])
+
+  let shown = await settingsTexts()
+  expect(shown).toContain('● Simple')
+  expect(shown).toContain('● Off')
+  expect(shown).toContain('No sounds')
+  expect(shown).toContain('Bars and spinners move')
+  expect(shown).toContain('● 50%')
+
+  await pick('view-detailed')
+  await pick('sound-chime')
+  await pick('calm-on')
+  shown = await settingsTexts()
+  expect(shown).toContain('● Details')
+  expect(shown).toContain('● Chime')
+  expect(shown).toContain('A short chime when Claude needs you')
+  expect(shown).toContain('▶ Play it')
+  expect(shown).toContain('Nothing on screen moves')
+  expect(shown).toContain('● On')
+  expect(played).toEqual(['sounds/needs-you.wav'])
+  expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Details')
+
+  await pick('view-off')
+  expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Off')
+
+  const result = await $.command.run({ command: 'glanceflow', args: 'settings' } as never)
+  expect(result.text).toBe('Settings are in the side panel.')
+  expect(opened).toHaveLength(2)
+})
+
+test('Tidy it up shows at the point picked in Settings, 50% full unless changed', async ($, on) => {
+  world(on)
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  const full = async (percent: number) => {
+    await $.session.measure({ context: { window: 200_000, tokens: percent * 2000, percent }, rateLimits: [], changed: ['context'] } as never)
+    return (await texts($, 'terminal')).join('\n')
+  }
+  expect(await full(45)).not.toContain('Tidy it up')
+  expect(await full(52)).toContain('This chat is 52% full. Claude saves a checkpoint')
+
+  await $.command.run({ command: 'glanceflow', args: 'tidy at 60' } as never)
+  expect(await full(52)).not.toContain('Tidy it up')
+  expect(await full(61)).toContain('Tidy it up')
+  const off = await $.command.run({ command: 'glanceflow', args: 'tidy off' } as never)
+  expect(off.text).toBe('GlanceFlow will not offer to tidy up.')
+  expect(await full(90)).not.toContain('Tidy it up')
+})
+
+test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads it afterwards', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text: string }).text))
+    return undefined as never
+  })
+  on('session.id', () => ({ value: 'chat-1' }) as never)
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  const forked: string[] = []
+  on('model.fork', (_, e) => {
+    forked.push(e.prompt)
+    return { value: { isAnswered: true, text: 'Checkpoint: the pricing page is done; next, the contact form.', usage: {} } } as never
+  })
+  let instructions = ''
+  on('session.compact', (_, e) => {
+    instructions = String((e as { instructions?: string }).instructions ?? '')
+    return { messages: [{ role: 'user', text: 'Summary of the chat so far.', toolUses: [] }] } as never
+  })
+  on('prompt.compose', () => ({ sections: [] }) as never)
+
+  await $.session.measure({ context: { window: 200_000, tokens: 110_000, percent: 55 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'compact' })
+  await ui.unmount()
+
+  expect(forked[0]).toContain('Write a checkpoint')
+  expect(instructions).toContain('Checkpoint: the pricing page is done; next, the contact form.')
+  expect(toasts).toContain('Chat tidied up. Claude keeps the checkpoint.')
+  const composed = await $.prompt.compose({ model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as never)
+  const checkpoint = (composed as unknown as { sections: { id: string; text: string }[] }).sections.find(one => one.id === 'glanceflow:checkpoint')
+  expect(checkpoint?.text).toContain('the pricing page is done')
 })

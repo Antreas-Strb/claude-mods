@@ -51,16 +51,16 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 ## What you get
 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
-- **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A long plan says how many steps are out of view.
+- **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A plan of more than five steps folds its finished steps, and the steps after the next one, into a line each; **▤ Plan** shows them all.
 - **What Claude is doing right now:** a quiet line under the current step says it in plain words, like `Reading files (3)…` or `Running the tests…`. No file names or commands.
 - **What each step got done:** when a step is checked off, Claude adds one plain-English line on what it did ("Added a pricing table with three plans"). It shows under the step until Claude moves on, and goes into the History and the Team report.
-- **Sounds, if you want them:** `/glanceflow sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glanceflow sound voice` also says it ("Claude needs you"). Off by default; macOS only for now.
+- **Sounds, if you want them:** `/glanceflow sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glanceflow sound voice` also says it ("Claude needs you"). Off by default (turn it on in ⚙ Settings); macOS only for now.
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
 - **Status at a glance:** every status says what is happening and, when Claude needs you, where to answer. Claude waiting for its own helpers is never **Needs you**.
 - **Helpers and background work:** subagents and background tasks show under the step that started them. GlanceFlow doesn't say All done while they still run.
 - **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when GlanceFlow is off.
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
-- **Plan limits:** a warning shows at 80% of a plan window (red at 95%), and a "Tidy it up" button appears when the chat gets long.
+- **Plan limits:** a warning shows at 80% of a plan window (red at 95%), and a "Tidy it up" button appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten.
 
 ## What each status means
 
@@ -68,7 +68,19 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 
 ## Pause and Continue
 
-Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Continue** picks the same job up again, with nothing to type. Continue also shows after Esc, when Claude got stuck, or when it is waiting with steps left. The header says **‖ Paused** after Pause and **■ Stopped** after Esc. `/glanceflow pause` and `/glanceflow continue` do the same.
+Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Continue** picks the same job up again, with nothing to type. Continue also shows after Esc, when Claude got stuck, or when it is waiting with steps left. The header says **‖ Paused** after Pause and **■ Stopped** after Esc. `/glanceflow pause` and `/glanceflow continue` do the same, and so does typing "continue" (or "συνέχισε") after Esc: the same job picks up, plan and all.
+
+## The whole plan
+
+**▤ Plan** under the checklist (or `/glanceflow plan`) opens the whole plan in a side panel, with what the checklist has no room for: when the job started and about when it will be done, every step however long the plan, what each finished step got done and how long it took, about how long each step still to come should take, what Claude is doing now, and every helper. In Details it adds tokens per step, the job's cost and plan usage. It stays live while Claude works, so the checklist above the prompt can stay short.
+
+![The Plan panel: every step with what it got done, its time, and what Claude is doing now](docs/glanceflow-plan.png)
+
+## Settings
+
+**⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), calm mode, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
+
+![The settings panel: view, sounds and calm mode](docs/glanceflow-settings.png)
 
 ## History for a retro
 
@@ -99,6 +111,10 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glanceflow history` | Shows today's jobs in this project |
 | `/glanceflow history yesterday`, `/glanceflow history 2026-10-06` | Shows another day |
 | `/glanceflow pause`, `/glanceflow continue` | Pauses Claude, or picks the job up again |
+| `/glanceflow plan` | Opens the whole plan in a side panel |
+| `/glanceflow settings` | Opens the settings: view, sounds, calm mode and when to tidy up |
+| `/glanceflow tidy` | Saves a checkpoint, then tidies up the chat |
+| `/glanceflow tidy at 60`, `/glanceflow tidy off` | When the checklist offers to tidy up |
 | `/glanceflow handoff` | Starts a fresh chat from a handoff note |
 | `/glanceflow handoff note` | Puts the last handoff note in the prompt box |
 | `/glanceflow sound on`, `/glanceflow sound voice`, `/glanceflow sound off` | A chime (and words) when Claude needs you, gets stuck or finishes a long job |

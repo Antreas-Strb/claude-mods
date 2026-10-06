@@ -47,6 +47,11 @@ const SOUND_KEY = 'glanceSound'
 const CALM_KEY = 'glanceCalm'
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
+// Below this width the mode button drops the name; below METER_MIN_COLUMNS the bars go, so step names keep their room.
+const NARROW = 60
+const METER_MIN_COLUMNS = 50
+// Longer plans fold finished and later steps into one line each; the Plan panel has them all.
+const COMPACT_AFTER = 5
 const MAX_SUMMARY = 100
 const METER = 10
 const LABEL_WIDTH = 7
@@ -59,7 +64,11 @@ const COLLAPSE_MS = 5000
 const RESEND_WINDOW_MS = 2 * 60 * 1000
 const LIMIT_WARN = 80
 const LIMIT_ALERT = 95
-const LONG_CHAT = 75
+// How full the chat gets before the band offers to tidy it up, unless the person picks another point.
+const TIDY_AT_DEFAULT = 50
+const TIDY_CHOICES = [0, 40, 50, 60, 75] as const
+const TIDY_KEY = 'glanceTidyAt'
+const CHECKPOINT_KEY = 'lastCheckpoint'
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly', spend_limit: 'spending' }
 
 const DENIED = 'you said no to a step, so Claude paused'
@@ -76,8 +85,12 @@ const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null
 const usageAtom = atom({ plugin: 'glanceflow', key: 'usage' } as const, NO_USAGE)
 const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off')
 const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
+const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
+const checkpointAtom = atom({ plugin: 'glanceflow', key: 'checkpointAt' } as const, null)
 const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
 const HISTORY_PANE = 'glanceflow-history'
+const PLAN_PANE = 'glanceflow-plan'
+const SETTINGS_PANE = 'glanceflow-settings'
 const handoffAtom = atom({ plugin: 'glanceflow', key: 'handoffState' } as const, 'idle')
 const HANDOFF_CONFIRM_MS = 8000
 // What the Continue button sends, as the person's own words; turn.start knows it and keeps the job going.
@@ -86,6 +99,11 @@ const HANDOFF_PROMPT = `Write a handoff note so a brand-new chat can carry on th
 Cover, briefly: the goal; what is already done; what is left, in order; decisions made and why; the files, commands
 or links that matter; and the very next step. Under 300 words, no preamble.
 Start with exactly: "Continuing from an earlier chat. Here is where things stand:"`
+
+const CHECKPOINT_PROMPT = `This chat is about to be compacted to free up room. Write a checkpoint so the work carries on
+without losing anything that matters. Cover, briefly: the goal; what is already done; what is left, in order; decisions
+made and why; what the person asked for or ruled out; the files, commands or links that matter; open questions; and the
+very next step. Under 300 words, no preamble. Start with exactly: "Checkpoint:"`
 
 const PROMPT_SECTION = `# GlanceFlow (progress checklist)
 The person follows your work on a checklist above the prompt, in plain English.
@@ -307,8 +325,8 @@ function leftLabel(ms: number): string {
  * Time left at this job's own pace since the plan once two steps are done. Before that, the steps left at
  * this project's usual pace from History; nothing when History doesn't know it yet.
  */
-export function timeLeft(list: GlanceChecklist, at: number): number | null {
-  const { doneCount, work } = overallProgress(list.tasks)
+export function timeLeft(list: GlanceChecklist, at: number, activePercent?: number): number | null {
+  const { doneCount, work } = overallProgress(list.tasks, activePercent)
   if (list.planAt === null || work >= 1) return null
   if (doneCount >= 2 && work > 0) return Math.round(((at - list.planAt) / work) * (1 - work))
   if (list.paceMs === null) return null
@@ -424,6 +442,15 @@ function isBusy(list: GlanceChecklist): boolean {
 }
 
 /** The person's own words: notes an app adds around a prompt (<system-reminder>…) are not the request. */
+/** A short "carry on" the person typed, in English or Greek: it continues the job instead of starting a new one. */
+export function isContinueWords(text: string): boolean {
+  const words = text.trim().toLowerCase().replace(/[.!…,;:]+$/g, '').replace(/\s+/g, ' ')
+  return (
+    /^(please )?(continue|go on|keep going|resume|carry on|proceed|go ahead)( please)?$/.test(words) ||
+    /^(σε παρακαλώ |παρακαλώ )?(συνέχισε|συνεχισε|συνέχεια|συνεχεια|προχώρα|προχωρα)( σε παρακαλώ| παρακαλώ| παρακαλω)?$/.test(words)
+  )
+}
+
 export function ownWords(text: string): string {
   return text.replace(/<([A-Za-z][\w-]*)\b[^>]*>[\s\S]*?<\/\1>/g, ' ').trim()
 }
@@ -695,6 +722,9 @@ const showHistory = async ($: $, day: string, isOpening: boolean) => {
   return isOpening ? $.ui.open({ id: HISTORY_PANE, title: `History · ${projectName(project)}`, closeOnEscape: true }) : null
 }
 
+/** Opens the whole plan in a side panel: every step, what each got done, its time and helpers. */
+const showPlan = ($: $) => $.ui.open({ id: PLAN_PANE, title: 'Plan', closeOnEscape: true })
+
 /** Switches the team report between the day and the week, and copies the new one. */
 const showReportSpan = async ($: $, span: 'day' | 'week', surface: RenderSurface) => {
   await update($, historyAtom, view => (view ? { ...view, reportSpan: span } : view))
@@ -871,22 +901,52 @@ const finishHelper = async ($: $, agentId: string, status: 'done' | 'failed') =>
   if (list?.phase === 'background') await settleFinished($, await now($), false)
 }
 
-/** Tidies the chat up: the engine's compaction, or /compact itself when that is refused. */
+/**
+ * Tidies the chat up without forgetting: Claude first writes a checkpoint of the work, the compaction is told to keep
+ * it, and it stays in Claude's instructions for the rest of this chat. Uses /compact itself when the engine refuses.
+ */
 const tidyUp = async ($: $) => {
-  $.ui.toast('Tidying up the chat…')
+  $.ui.toast('Saving a checkpoint, then tidying up the chat…')
+  let note: string | null = null
   try {
-    const done = await $.session.compact()
+    const reply = await $.model.fork({ prompt: CHECKPOINT_PROMPT })
+    if (reply.isAnswered && reply.text.trim()) note = reply.text.trim()
+  } catch {
+    // Tidying up still helps without a checkpoint.
+  }
+  if (note !== null) {
+    const at = await now($)
+    await $.store.set(CHECKPOINT_KEY, { sessionId: await $.session.id(), at, note })
+    await update($, checkpointAtom, () => at)
+  } else {
+    $.ui.toast("Couldn't save a checkpoint; tidying up anyway.")
+  }
+  const instructions = note === null ? '' : `Keep everything in this checkpoint; it is what the work needs to carry on.\n\n${note}`
+  try {
+    const done = await $.session.compact(note === null ? undefined : { instructions })
     if (done.skip !== undefined) $.ui.toast(`The chat was not tidied up: ${done.skip}`)
+    else if (note !== null) $.ui.toast('Chat tidied up. Claude keeps the checkpoint.')
     return
   } catch (refused) {
     $.ui.log(`glanceflow: compaction refused: ${refused instanceof Error ? refused.message : String(refused)}`, { to: 'debug' })
   }
   try {
-    await $.command.run({ command: 'compact', args: '' })
+    await $.command.run({ command: 'compact', args: instructions })
   } catch (failed) {
     const reason = failed instanceof Error ? failed.message : String(failed)
     $.ui.toast(`Couldn't tidy up the chat (${reason.slice(0, 80)}). Type /compact to try again.`)
   }
+}
+
+/** The checkpoint saved before this chat was last tidied up; null in another chat or when there is none. */
+const checkpointOf = async ($: $): Promise<string | null> => {
+  const saved = (await $.store.get(CHECKPOINT_KEY)) as { sessionId?: string; note?: string } | undefined
+  return saved?.note && saved.sessionId === (await $.session.id()) ? saved.note : null
+}
+
+const setTidyAt = async ($: $, percent: number) => {
+  await update($, tidyAtAtom, () => percent)
+  await $.store.set(TIDY_KEY, percent)
 }
 
 const holdSecretMessage = async ($: $, text: string, kinds: string[]) => {
@@ -915,6 +975,49 @@ const setEnabled = async ($: $, isEnabled: boolean) => {
 }
 
 /** The one button: Simple → Details → Off → Simple. */
+/** Sounds: off, a chime, or a chime and a few words. A chime plays at once so the person hears what they picked. */
+const setSound = async ($: $, mode: 'off' | 'chime' | 'voice') => {
+  await update($, soundAtom, () => mode)
+  await $.store.set(SOUND_KEY, mode)
+  if (mode !== 'off') void $.audio.play({ asset: 'sounds/needs-you.wav' }).catch(() => undefined)
+}
+
+/** Calm mode: nothing moves, statuses in bold; the band redraws only to keep times current. */
+const setCalm = async ($: $, isOn: boolean) => {
+  isCalmMode = isOn
+  await update($, calmAtom, () => isOn)
+  await $.store.set(CALM_KEY, isOn)
+  syncTicker($, await read($, checklistAtom))
+}
+
+/** Picks Simple, Details or Off directly, as the settings panel does. */
+const setView = async ($: $, view: 'simple' | 'detailed' | 'off') => {
+  await update($, enabledAtom, () => view !== 'off')
+  await $.store.set(STORE_KEY, view !== 'off')
+  if (view !== 'off') {
+    await update($, detailAtom, () => view)
+    await $.store.set(DETAIL_KEY, view)
+  }
+}
+
+/** Plays what the person picked, so they know what they will hear. */
+const alertSample = async ($: $, mode: 'off' | 'chime' | 'voice') => {
+  if (mode === 'off') return
+  await $.audio.play({ asset: 'sounds/needs-you.wav' }).catch(() => undefined)
+  if (mode === 'voice') await $.audio.speak('Claude needs you').catch(() => undefined)
+}
+
+/** Back to how GlanceFlow starts: Simple, no sounds, calm off, tidy up at 50%. */
+const resetSettings = async ($: $) => {
+  await setView($, 'simple')
+  await setSound($, 'off')
+  await setCalm($, false)
+  await setTidyAt($, TIDY_AT_DEFAULT)
+  $.ui.toast('Settings are back to their defaults.')
+}
+
+const showSettings = ($: $) => $.ui.open({ id: SETTINGS_PANE, title: 'GlanceFlow settings', closeOnEscape: true })
+
 const cycleMode = async ($: $, isEnabled: boolean, isDetailed: boolean) => {
   const nextEnabled = !(isEnabled && isDetailed)
   const nextDetailed = isEnabled && !isDetailed
@@ -986,6 +1089,11 @@ export function registerGlance(on: On): void {
     const sound = await $.store.get(SOUND_KEY)
     await update($, soundAtom, () => (sound === 'chime' || sound === 'voice' ? sound : 'off'))
     isCalmMode = (await $.store.get(CALM_KEY)) === true
+    const tidyAt = await $.store.get(TIDY_KEY)
+    await update($, tidyAtAtom, () => (typeof tidyAt === 'number' ? tidyAt : TIDY_AT_DEFAULT))
+    const saved = (await $.store.get(CHECKPOINT_KEY)) as { sessionId?: string; at?: number } | undefined
+    const thisSession = await $.session.id().catch(() => null)
+    await update($, checkpointAtom, () => (saved?.sessionId === thisSession && typeof saved?.at === 'number' ? saved.at : null))
     await update($, calmAtom, () => isCalmMode)
     // The history keeps 30 days.
     for (const key of expiredHistoryKeys(await $.store.keys(), await now($))) {
@@ -1032,7 +1140,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1046,9 +1154,7 @@ export function registerGlance(on: On): void {
       const choice = arg.slice('sound'.length).trim()
       const current = await read($, soundAtom)
       const mode = choice === 'voice' ? 'voice' : choice === 'off' ? 'off' : choice === 'on' || current === 'off' ? 'chime' : 'off'
-      await update($, soundAtom, () => mode)
-      await $.store.set(SOUND_KEY, mode)
-      if (mode !== 'off') void $.audio.play({ asset: 'sounds/needs-you.wav' }).catch(() => undefined)
+      await setSound($, mode)
       return {
         text:
           mode === 'off'
@@ -1060,10 +1166,7 @@ export function registerGlance(on: On): void {
     }
     if (arg.startsWith('calm')) {
       const choice = arg.slice('calm'.length).trim()
-      isCalmMode = choice === 'on' ? true : choice === 'off' ? false : !(await read($, calmAtom))
-      await update($, calmAtom, () => isCalmMode)
-      await $.store.set(CALM_KEY, isCalmMode)
-      syncTicker($, await read($, checklistAtom))
+      await setCalm($, choice === 'on' ? true : choice === 'off' ? false : !(await read($, calmAtom)))
       return { text: isCalmMode ? 'Calm mode is on: nothing moves, statuses are bold.' : 'Calm mode is off.' }
     }
     if (arg.startsWith('history')) {
@@ -1084,6 +1187,27 @@ export function registerGlance(on: On): void {
     if (arg === 'pause') {
       await pauseJob($)
       return { text: 'Paused.' }
+    }
+    if (arg.startsWith('tidy')) {
+      const choice = arg.slice('tidy'.length).trim().replace(/^at\s+/, '').replace('%', '')
+      if (choice === '') {
+        void tidyUp($)
+        return { text: 'Saving a checkpoint, then tidying up the chat.' }
+      }
+      const percent = choice === 'off' ? 0 : Number(choice)
+      if (!Number.isInteger(percent) || percent < 0 || percent > 95) {
+        return { text: 'Try /glanceflow tidy, /glanceflow tidy at 50 or /glanceflow tidy off.' }
+      }
+      await setTidyAt($, percent)
+      return { text: percent === 0 ? 'GlanceFlow will not offer to tidy up.' : `GlanceFlow offers to tidy up at ${percent}% full.` }
+    }
+    if (arg === 'settings') {
+      await showSettings($)
+      return { text: 'Settings are in the side panel.' }
+    }
+    if (arg === 'plan') {
+      await showPlan($)
+      return { text: 'The plan is in the side panel.' }
     }
     if (arg === 'continue') {
       void continueJob($)
@@ -1119,8 +1243,17 @@ export function registerGlance(on: On): void {
       return composed
     }
 
+    const checkpoint = await checkpointOf($).catch(() => null)
+
     return {
-      sections: [...composed.sections, { id: `${PLUGIN}:checklist`, text: PROMPT_SECTION, scope: 'session' as const }],
+      sections: [
+        ...composed.sections,
+        { id: `${PLUGIN}:checklist`, text: PROMPT_SECTION, scope: 'session' as const },
+        // Saved before the chat was tidied up: what the work needs to carry on.
+        ...(checkpoint === null
+          ? []
+          : [{ id: `${PLUGIN}:checkpoint`, text: `# Checkpoint saved before this chat was tidied up\n${checkpoint}`, scope: 'session' as const }]),
+      ],
     }
   })
 
@@ -1179,8 +1312,11 @@ export function registerGlance(on: On): void {
     if (list === null || !list.hasPlan || list.phase === 'done' || list.phase === 'stopped') {
       return next(e)
     }
-    const left = timeLeft(list, await now($))
-    const label = `◎ ${overallProgress(list.tasks).percent}%${left === null ? '' : ` · ~${formatLeft(left)}`}`
+    const at = await now($)
+    const active = list.tasks.find(one => one.status === 'active')
+    const activePercent = active ? stepEstimate(list, active, at).percent : undefined
+    const left = timeLeft(list, at, activePercent)
+    const label = `◎ ${overallProgress(list.tasks, activePercent).percent}%${left === null ? '' : ` · ~${formatLeft(left)}`}`
 
     return next({ ...e, props: { ...e.props, modes: [label, ...e.props.modes] } })
   })
@@ -1236,8 +1372,8 @@ export function registerGlance(on: On): void {
     runningTurn = e.turnId
     const text = ownWords(e.text)
     const current = await read($, checklistAtom)
-    if (text === CONTINUE_TEXT && current !== null) {
-      // The Continue button: the same job picks up again.
+    if (current !== null && (text === CONTINUE_TEXT || (isContinueWords(text) && current.phase !== 'done'))) {
+      // The Continue button, or "continue" typed: the same job picks up again.
       await change($, list => ({
         ...list,
         phase: 'working',
@@ -1530,6 +1666,307 @@ export function registerGlance(on: On): void {
   )
 
   // The day's history of this project, for a retro.
+  // Every choice in one place. Each group shows what is picked on its right, and a line on what that choice does.
+  on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const isEnabled = await read($, enabledAtom)
+    const view = !isEnabled ? 'off' : await read($, detailAtom)
+    const sound = await read($, soundAtom)
+    const isCalm = await read($, calmAtom)
+    const tidyAt = await read($, tidyAtAtom)
+    const checkpointAt = await read($, checkpointAtom)
+    const usage = await read($, usageAtom)
+    const columns = Math.max(30, e.props.bodyColumns)
+    const rule = '─'.repeat(Math.min(columns, 64))
+
+    const choice = <T extends string | number>(key: string, options: [T, string][], picked: T, onPick: (value: T) => Promise<void>) => (
+      <Box key={`${key}-choices`} flexDirection="row" gap={1} flexWrap="wrap">
+        {options.map(([value, label]) => (
+          <Button
+            key={`${key}-${value}`}
+            label={value === picked ? `● ${label}` : `○ ${label}`}
+            variant={value === picked ? 'primary' : 'secondary'}
+            onPress={() => onPick(value)}
+          />
+        ))}
+      </Box>
+    )
+    const group = (key: string, title: string, picked: string, control: RenderChildren, help: string, extra?: RenderChildren) => (
+      <Box key={key} flexDirection="column" marginTop={1}>
+        <Box flexDirection="row" justifyContent="space-between" width={Math.min(columns, 64)}>
+          <Text bold>{title}</Text>
+          <Text color="cyan">{picked}</Text>
+        </Box>
+        {control}
+        <Text dimColor wrap="wrap">
+          {help}
+        </Text>
+        {extra}
+      </Box>
+    )
+
+    const viewHelp = {
+      simple: 'The steps and progress in plain words, with tool details out of the way. For everyone.',
+      detailed: 'Also time, models and tokens per step, with the code in view. For engineers.',
+      off: 'Claude Code as usual: no checklist, every tool row shown. The password guard stays on.',
+    }[view]
+    const soundHelp = {
+      off: 'No sounds. Turn them on to look away while Claude works.',
+      chime: 'A short chime when Claude needs you, gets stuck, or finishes a job that took over a minute.',
+      voice: 'The chime, and a few words like "Claude needs you". macOS only for now.',
+    }[sound]
+    const chatFull = usage.contextPercent === null ? null : Math.round(usage.contextPercent)
+    const tidyHelp =
+      tidyAt === 0
+        ? 'GlanceFlow never offers to tidy up. Claude Code still compacts on its own when the chat is full.'
+        : `At ${tidyAt}% full, the checklist offers to tidy up. Claude first saves a checkpoint of the work (goal, what is done and left, decisions, the next step), so nothing important is lost when the chat is compacted.`
+
+    return (
+      <Box flexDirection="column" width={columns}>
+        <Text bold>⚙ GlanceFlow settings</Text>
+        <Text dimColor wrap="wrap">
+          Changes apply right away and stay for your next chats.
+        </Text>
+        <Text dimColor>{rule}</Text>
+        {group(
+          'view',
+          'View',
+          view === 'simple' ? 'Simple' : view === 'detailed' ? 'Details' : 'Off',
+          choice('view', [['simple', 'Simple'], ['detailed', 'Details'], ['off', 'Off']], view, value => setView($, value)),
+          viewHelp,
+        )}
+        {group(
+          'sound',
+          'Sounds',
+          sound === 'off' ? 'Off' : sound === 'chime' ? 'Chime' : 'Chime and voice',
+          choice('sound', [['off', 'Off'], ['chime', 'Chime'], ['voice', 'Chime and voice']], sound, value => setSound($, value)),
+          soundHelp,
+          sound === 'off' ? undefined : (
+            <Box key="sound-test" marginTop={0}>
+              <Button key="sound-test" label="▶ Play it" onPress={() => alertSample($, sound)} />
+            </Box>
+          ),
+        )}
+        {group(
+          'calm',
+          'Calm mode',
+          isCalm ? 'On' : 'Off',
+          choice('calm', [['off', 'Off'], ['on', 'On']], isCalm ? 'on' : 'off', value => setCalm($, value === 'on')),
+          isCalm ? 'Nothing on screen moves, and statuses read in bold.' : 'Bars and spinners move while Claude works. Turn on for a still screen.',
+        )}
+        {group(
+          'tidy',
+          'Tidy up the chat',
+          tidyAt === 0 ? 'Never' : `At ${tidyAt}% full`,
+          choice(
+            'tidy',
+            TIDY_CHOICES.map(value => [value, value === 0 ? 'Never' : `${value}%`] as [number, string]),
+            tidyAt,
+            value => setTidyAt($, value),
+          ),
+          tidyHelp,
+          <Box key="tidy-now" flexDirection="column">
+            {(chatFull !== null || checkpointAt !== null) && (
+              <Text dimColor wrap="wrap">
+                {[
+                  chatFull === null ? '' : `This chat is ${chatFull}% full.`,
+                  checkpointAt === null ? '' : `Last checkpoint saved at ${clockTime(checkpointAt)}.`,
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              </Text>
+            )}
+            <Box>
+              <Button key="tidy-now" label="Tidy up now" onPress={() => tidyUp($)} />
+            </Box>
+          </Box>,
+        )}
+        <Text dimColor>{rule}</Text>
+        <Box key="actions" flexDirection="row" gap={1}>
+          <Button key="close" label="Done" variant="primary" role="dismiss" onPress={() => $.ui.close({ id: SETTINGS_PANE })} />
+          <Button key="reset" label="Reset to defaults" onPress={() => resetSettings($)} />
+        </Box>
+      </Box>
+    )
+  })
+
+  // The whole plan beside the chat, with what the band above the prompt has no room for: when the job started and
+  // should end, every step's summary and time (or expected time), all helpers, and in Details the tokens and cost.
+  on('ui.render', { component: 'Pane', requestId: PLAN_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const list = await read($, checklistAtom)
+    await read($, tickAtom)
+    const isDetailed = (await read($, detailAtom)) === 'detailed'
+    const columns = Math.max(40, e.props.bodyColumns)
+    const actions = (
+      <Box key="actions" flexDirection="row" gap={1} marginTop={1}>
+        <Button key="close" label="Close" role="dismiss" onPress={() => $.ui.close({ id: PLAN_PANE })} />
+        <Button key="history" label="History" onPress={async () => showHistory($, dayKey(await now($)), true)} />
+      </Box>
+    )
+    if (list === null || !list.hasPlan) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No plan yet. Ask Claude for something and its plan shows here.</Text>
+          {actions}
+        </Box>
+      )
+    }
+
+    const at = list.finishedAt ?? (await now($))
+    const active = list.tasks.find(one => one.status === 'active')
+    // The same percentage as the band in this view: Details fills the current step from its time estimate.
+    const activePercent = active ? stepEstimate(list, active, at).percent : undefined
+    const { percent, doneCount } = overallProgress(list.tasks, activePercent)
+    const left = list.phase === 'done' ? null : timeLeft(list, at, activePercent)
+    const when =
+      list.phase === 'done'
+        ? `Started ${clockTime(list.startedAt)} · finished ${clockTime(at)} · took ${formatDuration(at - list.startedAt)}`
+        : [
+            `Started ${clockTime(list.startedAt)}`,
+            `${formatDuration(at - list.startedAt)} so far`,
+            left === null ? '' : `about ${formatLeft(left)} left, done around ${clockTime(at + left)}`,
+          ]
+            .filter(Boolean)
+            .join(' · ')
+    const bar = '█'.repeat(Math.round(percent / 5)) + '░'.repeat(20 - Math.round(percent / 5))
+    const grew = list.plannedCount > 0 && list.tasks.length > list.plannedCount ? ` · plan grew ${list.plannedCount} → ${list.tasks.length}` : ''
+    const status =
+      list.phase === 'needsYou'
+        ? { color: 'yellow', text: `Needs you: ${list.needsYouReason ?? WAITING}` }
+        : list.phase === 'stuck'
+          ? { color: 'yellow', text: `Stuck: ${list.stuckReason ?? 'Claude can\'t go on right now'}` }
+          : list.phase === 'stopped'
+            ? { color: undefined, text: list.stopKind === 'pause' ? 'Paused: press Continue to pick up' : 'Stopped: you pressed Esc' }
+            : list.phase === 'background'
+              ? { color: 'cyan', text: 'Claude answered; helpers still run in the background' }
+              : null
+
+    // One row per step: mark, name, then its time; the time column lines up across rows.
+    const nameWidth = Math.max(12, Math.min(MAX_NAME, columns - 24))
+    const row = (key: string, mark: RenderChildren, name: RenderChildren, time: string, timeIsDim = true) => (
+      <Box key={key} flexDirection="row">
+        {mark}
+        {name}
+        <Text dimColor={timeIsDim} wrap="truncate-end">{` ${fit(time, Math.max(0, columns - 3 - nameWidth)).trimEnd()}`}</Text>
+      </Box>
+    )
+    const note = (key: string, text: string) => (
+      <Text key={key} dimColor wrap="wrap">
+        {`    ${text}`}
+      </Text>
+    )
+    const helperRows = (one: GlanceTask) =>
+      list.helpers
+        .filter(helper => helper.stepId === one.id)
+        .map(helper => {
+          const mark = helper.status === 'running' ? '◐' : helper.status === 'failed' ? '✗' : '✓'
+          const kind = helper.kind === 'background' ? 'in the background' : helper.type === 'general-purpose' ? 'helper' : helper.type
+          const details = [kind, helper.model, isDetailed && helper.effort ? `${helper.effort} effort` : null, isDetailed && helper.tokens > 0 ? `${formatTokens(helper.tokens)} tokens` : null]
+            .filter(Boolean)
+            .join(' · ')
+          return note(`helper-${helper.id}`, `↳ ${mark} ${helper.label}${details ? ` · ${details}` : ''}`)
+        })
+    const tokensOf = (one: GlanceTask) => (isDetailed ? tokenNote(one.tokens, one.cachedTokens) : '')
+
+    const done: RenderChildren[] = []
+    const now_: RenderChildren[] = []
+    const next_: RenderChildren[] = []
+    list.tasks.forEach((one, index) => {
+      const key = `step-${index}`
+      if (one.status === 'done') {
+        const took = one.startedAt !== null && one.finishedAt !== null ? `took ${formatDuration(one.finishedAt - one.startedAt)}` : 'done'
+        done.push(
+          row(key, <Text color="green">✓ </Text>, <Text>{fit(one.name, nameWidth)}</Text>, [took, tokensOf(one)].filter(Boolean).join(' · ')),
+          ...(one.summary ? [note(`${key}-summary`, one.summary)] : []),
+          ...helperRows(one),
+        )
+      } else if (one.status === 'active') {
+        const estimate = stepEstimate(list, one, at)
+        const time = [isDetailed ? `${estimate.percent}%` : '', formatDuration(estimate.elapsedMs), leftLabel(estimate.leftMs)].filter(Boolean).join(' · ')
+        now_.push(
+          row(key, <Text color="cyan">▶ </Text>, <Text bold>{fit(one.name, nameWidth)}</Text>, time, false),
+          ...(tokensOf(one) ? [note(`${key}-tokens`, `${tokensOf(one)} so far`)] : []),
+          ...(list.phase === 'working' && list.activity !== null
+            ? [note(`${key}-activity`, `${list.activity.label}${list.activity.count > 1 ? ` (${list.activity.count})` : ''}…`)]
+            : []),
+          ...helperRows(one),
+        )
+      } else {
+        const expected = stepEstimate(list, one, at).leftMs
+        next_.push(
+          row(key, <Text dimColor>○ </Text>, <Text dimColor>{fit(one.name, nameWidth)}</Text>, expected < 60_000 ? 'under a minute' : `about ${formatLeft(expected)}`),
+          ...helperRows(one),
+        )
+      }
+    })
+    const section = (key: string, label: string, rows: RenderChildren[]) =>
+      rows.length === 0 ? null : (
+        <Box key={key} flexDirection="column" marginTop={1}>
+          <Text bold dimColor>
+            {label}
+          </Text>
+          {rows}
+        </Box>
+      )
+
+    const footer: string[] = []
+    const running = list.helpers.filter(one => one.status === 'running').length
+    if (list.helpers.length > 0) {
+      const finished = list.helpers.length - running
+      footer.push(`Helpers: ${[running > 0 ? `${running} working` : '', finished > 0 ? `${finished} finished` : ''].filter(Boolean).join(', ')}`)
+    }
+    if (left !== null && list.paceMs !== null && doneCount < 2) {
+      footer.push('Time left is based on how long steps took in this project before.')
+    }
+    if (isDetailed) {
+      const usage = await read($, usageAtom)
+      const tokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
+      const cached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
+      const spent = jobCost(list, usage)
+      const job = [tokenNote(tokens, cached), spent === null ? '' : formatCost(spent)].filter(Boolean).join(' · ')
+      if (job) footer.push(`This job: ${job}`)
+      const plan = [
+        ...usage.limits.map(one => `${one.label} ${Math.round(one.percent)}%`),
+        usage.contextPercent === null ? '' : `chat ${Math.round(usage.contextPercent)}% full`,
+      ].filter(Boolean)
+      if (plan.length > 0) footer.push(`Plan usage: ${plan.join(' · ')}`)
+    }
+
+    return (
+      <Box flexDirection="column" width={columns}>
+        <Text bold wrap="wrap">
+          {list.title}
+        </Text>
+        <Text dimColor wrap="wrap">
+          {when}
+        </Text>
+        <Box key="progress" flexDirection="row">
+          <Text color={list.phase === 'done' ? 'green' : 'cyan'}>{bar}</Text>
+          <Text>{` ${percent}% · ${doneCount} of ${list.tasks.length} steps done${grew}`}</Text>
+        </Box>
+        {status && (
+          <Text key="status" color={status.color} bold wrap="wrap">
+            {status.text}
+          </Text>
+        )}
+        {section('done', 'Done', done)}
+        {section('now', 'Now', now_)}
+        {section('next', 'Next', next_)}
+        {footer.length > 0 && (
+          <Box key="footer" flexDirection="column" marginTop={1}>
+            {footer.map((line, index) => (
+              <Text key={`footer-${index}`} dimColor wrap="wrap">
+                {line}
+              </Text>
+            ))}
+          </Box>
+        )}
+        {actions}
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: HISTORY_PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
     const { Box, Text, Button } = table
@@ -1703,10 +2140,12 @@ export function registerGlance(on: On): void {
       list0 !== null &&
       (list0.phase === 'stopped' || list0.phase === 'stuck' || (list0.phase === 'needsYou' && list0.needsYouReason === WAITING))
     const actions = isEnabled ? (
-      <Box key="actions" flexDirection="row" gap={2}>
+      <Box key="actions" flexDirection="row" gap={columns < 44 ? 1 : 2}>
         {canPause && <Button key="pause" plain label="‖ Pause" onPress={() => pauseJob($)} />}
         {canContinue && <Button key="continue" plain label="▶ Continue" onPress={() => continueJob($)} />}
+        {list0?.hasPlan && <Button key="plan" plain label="▤ Plan" onPress={() => showPlan($)} />}
         <Button key="history" plain label="☰ History" onPress={() => showHistory($, dayKey(current), true)} />
+        <Button key="settings" plain label={columns < 60 ? '⚙' : '⚙ Settings'} onPress={() => showSettings($)} />
         {list0 !== null && (
         <Button
           key="handoff"
@@ -1716,7 +2155,9 @@ export function registerGlance(on: On): void {
               ? '↻ Press again to start a fresh chat'
               : handoff === 'working'
                 ? '↻ Writing a handoff note…'
-                : '↻ Fresh chat'
+                : columns < 40
+                  ? '↻ Fresh'
+                  : '↻ Fresh chat'
           }
           onPress={() => pressHandoff($)}
         />
@@ -1745,12 +2186,13 @@ export function registerGlance(on: On): void {
         </Box>,
       )
     }
-    if (usage.contextPercent !== null && usage.contextPercent >= LONG_CHAT) {
+    const tidyAt = isEnabled ? await read($, tidyAtAtom) : 0
+    if (usage.contextPercent !== null && tidyAt > 0 && usage.contextPercent >= tidyAt) {
       warnings.push(
         <Box key="long-chat" flexDirection="row" justifyContent="space-between" width={columns}>
           <Box flexShrink={1}>
             <Text wrap="truncate-end" color="yellow">
-              This chat is getting long. Tidying it up keeps Claude quick.
+              {`This chat is ${Math.round(usage.contextPercent)}% full. Claude saves a checkpoint before tidying up.`}
             </Text>
           </Box>
           <Button
@@ -1766,12 +2208,24 @@ export function registerGlance(on: On): void {
     const button = (
       <Button
         key="toggle"
-        label={!isEnabled ? '○ GlanceFlow: Off' : isDetailed ? '● GlanceFlow: Details' : '● GlanceFlow: Simple'}
+        label={
+          columns < NARROW
+            ? !isEnabled
+              ? '○ Off'
+              : isDetailed
+                ? '● Details'
+                : '● Simple'
+            : !isEnabled
+              ? '○ GlanceFlow: Off'
+              : isDetailed
+                ? '● GlanceFlow: Details'
+                : '● GlanceFlow: Simple'
+        }
         variant={isEnabled ? 'primary' : 'secondary'}
         onPress={() => cycleMode($, isEnabled, isDetailed)}
       />
     )
-    const headerWidth = Math.max(0, columns - 27)
+    const headerWidth = Math.max(0, columns - (columns < NARROW ? 15 : 27))
     const row = (header: RenderChildren) => (
       <Box key="header" flexDirection="row" justifyContent="space-between" width={columns}>
         <Box flexShrink={1} flexGrow={1}>
@@ -1849,9 +2303,11 @@ export function registerGlance(on: On): void {
         </Text>
       )
     } else {
-      const left = list.hasPlan ? timeLeft(list, current) : null
       const activeStep = list.tasks.find(one => one.status === 'active')
-      const activeEstimate = isDetailed && activeStep ? stepEstimate(list, activeStep, stepClock).percent : undefined
+      // Both views fill the current step from its time estimate, so the percentage moves before a step is checked off.
+      const activeEstimate = activeStep ? stepEstimate(list, activeStep, stepClock).percent : undefined
+      // Time left follows the percentage shown, so the two never disagree.
+      const left = list.hasPlan ? timeLeft(list, current, activeEstimate) : null
       const hasGrown = list.hasPlan && list.plannedCount > 0 && list.tasks.length > list.plannedCount
       // Time left replaces time spent once there is an estimate.
       const details = headerDetails(
@@ -1882,11 +2338,13 @@ export function registerGlance(on: On): void {
     }
 
     // Name column: whatever the row leaves after mark, meter and label, so rows never wrap.
-    const nameWidth = Math.max(4, Math.min(MAX_NAME, columns - 2 - 2 - METER - 2 - LABEL_WIDTH - 1))
+    const hasMeter = columns >= METER_MIN_COLUMNS
+    const bar = (cells: string) => (hasMeter ? ` ${cells} ` : ' ')
+    const nameWidth = Math.max(4, Math.min(MAX_NAME, columns - 2 - 2 - (hasMeter ? METER + 2 : 1) - LABEL_WIDTH - 1))
     const room = Math.max(1, e.props.maxRows - 1 - warnings.length - (actions ? 1 : 0))
     const firstUpcoming = list.tasks.findIndex(one => one.status === 'upcoming')
     // What is left of the row after mark, name, meter and label: the step's tokens, when they fit.
-    const usageRoom = columns - 2 - nameWidth - (METER + 2) - LABEL_WIDTH - 1
+    const usageRoom = columns - 2 - nameWidth - (hasMeter ? METER + 2 : 1) - LABEL_WIDTH - 1
     const usageCell = (one: GlanceTask) => {
       let timeNote = ''
       if (one.status === 'done' && one.startedAt !== null && one.finishedAt !== null) {
@@ -1908,15 +2366,83 @@ export function registerGlance(on: On): void {
         .slice(0, HELPERS_PER_STEP)
 
     // What the step that just finished got done, until Claude's next activity takes the line.
+    // Steps checked off together finish at the same moment: the latest in the plan wins.
     const justDone = list.tasks
       .filter(one => one.status === 'done' && one.finishedAt !== null)
+      .reverse()
       .sort((a, b) => b.finishedAt! - a.finishedAt!)[0]
     const showsSummary = (list.phase === 'working' || list.phase === 'done') && list.activity === null && Boolean(justDone?.summary)
 
+    // A long plan folds its finished steps, and the steps after the next one, into a line each.
+    const isCompact = list.tasks.length > COMPACT_AFTER
+    const doneSteps = list.tasks.filter(one => one.status === 'done')
+    const foldsDone = isCompact && doneSteps.length >= 2
+    const laterSteps = list.tasks.filter((one, index) => one.status === 'upcoming' && index !== firstUpcoming)
+    const foldsLater = isCompact && laterSteps.length >= 2
+    // Where the current step stands: the word says when Claude isn't working on it.
+    const standing =
+      list.phase === 'needsYou'
+        ? { mark: '‖ ', label: 'Waiting' }
+        : list.phase === 'stuck'
+          ? { mark: '⚠ ', label: 'Stuck' }
+          : list.phase === 'stopped'
+            ? list.stopKind === 'pause'
+              ? { mark: '‖ ', label: 'Paused' }
+              : { mark: '■ ', label: 'Stopped' }
+            : null
+
     // Every line: each step, then the helpers working under it.
-    const lines: { key: string; isActive: boolean; element: RenderChildren }[] = []
+    // `steps`: how many plan steps a line stands for (a folded line stands for several).
+    const lines: { key: string; isActive: boolean; element: RenderChildren; steps?: number }[] = []
     list.tasks.forEach((one, index) => {
       const key = `task-${index}`
+      if (one.status === 'done' && foldsDone) {
+        if (one !== doneSteps[0]) return
+        lines.push({
+          key,
+          steps: doneSteps.length,
+          isActive: false,
+          element: (
+            <Box key={key} flexDirection="row">
+              <Text color="green">✓ </Text>
+              <Text dimColor>{fit(`${doneSteps.length} steps done`, nameWidth)}</Text>
+              <Text color="green">{bar('█'.repeat(METER))}</Text>
+              <Text dimColor>{fit('Done', LABEL_WIDTH)}</Text>
+            </Box>
+          ),
+        })
+        if (showsSummary && justDone) {
+          lines.push({
+            key: 'summary',
+            isActive: false,
+            element: (
+              <Box key="summary" flexDirection="row">
+                <Text dimColor wrap="truncate-end">
+                  {fit(`    ${justDone.summary}`, Math.max(0, columns - 1)).trimEnd()}
+                </Text>
+              </Box>
+            ),
+          })
+        }
+        return
+      }
+      if (one.status === 'upcoming' && foldsLater && index !== firstUpcoming) {
+        if (one !== laterSteps[0]) return
+        lines.push({
+          key,
+          steps: laterSteps.length,
+          isActive: false,
+          element: (
+            <Box key={key} flexDirection="row">
+              <Text dimColor>○ </Text>
+              <Text dimColor>{fit(`${laterSteps.length} more steps`, nameWidth)}</Text>
+              <Text dimColor>{bar('░'.repeat(METER))}</Text>
+              <Text dimColor>Later</Text>
+            </Box>
+          ),
+        })
+        return
+      }
       if (one.status === 'done') {
         lines.push({
           key,
@@ -1925,7 +2451,7 @@ export function registerGlance(on: On): void {
             <Box key={key} flexDirection="row">
               <Text color="green">✓ </Text>
               <Text dimColor>{fit(one.name, nameWidth)}</Text>
-              <Text color="green"> {'█'.repeat(METER)} </Text>
+              <Text color="green">{bar('█'.repeat(METER))}</Text>
               <Text dimColor>{fit('Done', LABEL_WIDTH)}</Text>
               {usageCell(one)}
             </Box>
@@ -1950,9 +2476,10 @@ export function registerGlance(on: On): void {
         const hasPercent = isDetailed || one.hasReported
         const filled = Math.round(shownPercent / 10)
         const sweepAt = tick % (METER + 3)
+        // Only a step Claude is working on moves; one that waits on you or has stopped stands still.
         const meter = hasPercent
           ? '█'.repeat(filled) + '░'.repeat(METER - filled)
-          : isCalm
+          : isCalm || standing !== null
             ? '░'.repeat(METER)
             : Array.from({ length: METER }, (_, cell) => (cell >= sweepAt - 2 && cell <= sweepAt ? '█' : '░')).join('')
         lines.push({
@@ -1960,10 +2487,10 @@ export function registerGlance(on: On): void {
           isActive: true,
           element: (
             <Box key={key} flexDirection="row">
-              <Text color="cyan">{list.phase === 'needsYou' ? '‖ ' : '▶ '}</Text>
+              <Text color={standing?.label === 'Stuck' ? 'yellow' : 'cyan'}>{standing?.mark ?? '▶ '}</Text>
               <Text bold>{fit(one.name, nameWidth)}</Text>
-              <Text color="cyan"> {meter} </Text>
-              <Text>{fit(hasPercent ? `${shownPercent}%` : 'Working', LABEL_WIDTH)}</Text>
+              <Text color="cyan">{bar(meter)}</Text>
+              <Text>{fit(standing?.label ?? (hasPercent ? `${shownPercent}%` : 'Working'), LABEL_WIDTH)}</Text>
               {usageCell(one)}
             </Box>
           ),
@@ -1991,13 +2518,13 @@ export function registerGlance(on: On): void {
             <Box key={key} flexDirection="row">
               <Text dimColor>○ </Text>
               <Text dimColor>{fit(one.name, nameWidth)}</Text>
-              <Text dimColor> {'░'.repeat(METER)} </Text>
+              <Text dimColor>{bar('░'.repeat(METER))}</Text>
               <Text dimColor>{index === firstUpcoming ? 'Next' : 'Later'}</Text>
             </Box>
           ),
         })
       }
-      for (const helper of helpersOf(one.id)) {
+      for (const helper of helpersOf(one.id).filter(helper => !(foldsDone && one.status === 'done') || helper.status === 'running')) {
         const helperKey = `helper-${helper.id}`
         // Say "in the background" once: not when the task's own name already does.
         const kindLabel =
@@ -2046,7 +2573,8 @@ export function registerGlance(on: On): void {
     const focus = Math.max(0, lines.findIndex(one => one.isActive))
     // One line of context above the current step when there is room for it.
     const windowAt = (size: number) => Math.min(Math.max(0, focus - (size > 2 ? 1 : 0)), Math.max(0, lines.length - size))
-    const stepsIn = (from: number, to: number) => lines.slice(from, to).filter(one => one.key.startsWith('task-')).length
+    const stepsIn = (from: number, to: number) =>
+      lines.slice(from, to).reduce((sum, one) => sum + (one.key.startsWith('task-') ? (one.steps ?? 1) : 0), 0)
     const isCut = stepsIn(0, windowAt(room)) + stepsIn(windowAt(room) + room, lines.length) > 0
     // The "more steps" line needs a row of its own; with a single row the current step wins.
     const shown = isCut && room > 1 ? room - 1 : room

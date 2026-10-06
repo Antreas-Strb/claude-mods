@@ -162,6 +162,10 @@ declare module 'claude-code' {
       soundMode: 'off' | 'chime' | 'voice'
       /** Calm mode: nothing moves, and statuses read in bold. */
       isCalm: boolean
+      /** How full the chat gets, in percent, before the band offers to tidy it up; 0 never offers. */
+      tidyAt: number
+      /** When the last checkpoint was saved before tidying up; null when none was. */
+      checkpointAt: number | null
     }
   }
 }
