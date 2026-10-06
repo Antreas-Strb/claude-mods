@@ -98,7 +98,7 @@ test('a to-do list plus a 60% report draws done, current, next and up next rows'
     expect(shown).toContain('██████░░░░')
     expect(shown).toContain('60%')
     expect(shown).toContain('Next')
-    expect(shown).toContain('Up next')
+    expect(shown).toContain('Later')
     expect(shown).toContain('Glance: Simple')
   }
 })
@@ -450,7 +450,7 @@ test('Claude waiting for its own helper is not Needs you; it is when Claude wait
   await $.turn.complete({ answer: 'Shall I file the follow-ups?', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer' })
   shown = (await texts($, 'terminal')).join('\n')
   expect(shown).toContain('Needs you')
-  expect(shown).toContain('Claude is waiting: type your reply below')
+  expect(shown).toContain('Reply to Claude in the box below')
 })
 
 test('a background shell Claude waits for is not Needs you either', async ($, on) => {
@@ -822,8 +822,51 @@ test('the team report is plain: done, in progress, stuck and time, without token
   expect(report).not.toContain('cached')
 })
 
+test('before any work the band says where the plan will show, without a Fresh chat button', async ($, on) => {
+  world(on)
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain("Ask Claude for something: its plan shows here")
+  expect(shown).toContain('☰ History')
+  expect(shown).not.toContain('Fresh chat')
+})
+
+test('Details keeps the tool rows in view; Simple hides them', async ($, on) => {
+  world(on)
+  const PROGRESS_ROW = {
+    plugin: 'glance',
+    component: 'ToolProgress',
+    props: { tool_use_id: 'tu1', kind: 'background_hint', hint: '(ctrl+b to run in background)' },
+  } as const
+  let drawn = ''
+  on('ui.render', { component: 'ToolProgress' }, (_, e) => {
+    drawn = (e.props as { hint: string }).hint
+    return { type: 'Text', props: {}, children: [drawn] } as never
+  })
+  const hint = async () => {
+    const ui = await $.ui.mount({ ...PROGRESS_ROW, surface: 'terminal' } as never)
+    await ui.unmount()
+    return drawn
+  }
+  expect(await hint()).not.toContain('ctrl+b')
+  await detailsOn($)
+  expect(await hint()).toContain('ctrl+b')
+})
+
+test('a long plan says how many steps are out of view', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight'] })
+  await callTool($, { tool: PROGRESS, task: 'Three', percent: 100 })
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 6 }, surface: 'terminal' })
+  const shown = (await ui.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  await ui.unmount()
+  expect(shown).toContain('… 2 earlier · 3 more steps')
+  expect(shown).toContain('Four')
+})
+
 test('the band has History and Fresh chat buttons while Glance is on', async ($, on) => {
   world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).toContain('☰ History')
@@ -914,6 +957,10 @@ test('Fresh chat asks for a second press, then clears the chat and sends a hando
     sent = e.text
     return { text: e.text }
   })
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  // Fresh chat shows once the chat has some work in it.
+  await $.turn.start({ text: 'Fix the menu', turnId: 't1' })
 
   const press = async () => {
     const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })

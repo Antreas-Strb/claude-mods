@@ -1,6 +1,6 @@
 {
   "name": "glance",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Glance: see what Claude is doing, at a glance. Hides tool rows and shows one plain-English checklist above the prompt, with progress, helpers, history, a team report, pause and continue, and a password guard.",
   "author": {
     "name": "Antreas-Strb"

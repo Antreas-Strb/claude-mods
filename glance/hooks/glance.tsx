@@ -55,7 +55,7 @@ const DENIED = 'you said no to a step, so Claude paused'
 const FAILING = 'a step keeps failing, Claude is trying another way'
 const PERMISSION = "Answer Claude's request in the chat"
 const QUESTION = "Answer Claude's question in the chat"
-const WAITING = 'Claude is waiting: type your reply below'
+const WAITING = 'Reply to Claude in the box below'
 
 const enabledAtom = atom({ plugin: 'glance', key: 'glanceEnabled' } as const, true)
 const detailAtom = atom({ plugin: 'glance', key: 'detailLevel' } as const, 'simple')
@@ -75,7 +75,7 @@ or links that matter; and the very next step. Under 300 words, no preamble.
 Start with exactly: "Continuing from an earlier chat. Here is where things stand:"`
 
 const PROMPT_SECTION = `# Glance (progress checklist)
-The person is not technical and sees a simple checklist instead of tool calls.
+The person follows your work on a checklist above the prompt, in plain English.
 - A question you can answer straight away, with no tools, needs no plan: just answer.
 - Before you use any other tool, call plan_steps (tool ${PLAN_TOOL}) with 2 to 8 steps in order. If it is deferred, load it with ToolSearch first. If this session has TodoWrite or TaskCreate you may use that to-do list as the plan instead.
 - Give each step a size in plan_steps' sizes list, in the same order: S (a few minutes), M, or L (the biggest pieces of work).
@@ -1241,8 +1241,9 @@ export function registerGlance(on: On): void {
     return next(e)
   })
 
+  // Simple hides the tool rows; Details keeps them, for people who want the code next to the checklist.
   on('ui.render', { component: ['ToolUse', 'ToolResult', 'ToolGroup'] }, async ($, e, next) => {
-    if (!(await read($, enabledAtom))) {
+    if (!(await read($, enabledAtom)) || (await read($, detailAtom)) === 'detailed') {
       return next(e)
     }
     const { Box } = $.ui.resolve(e)
@@ -1251,7 +1252,9 @@ export function registerGlance(on: On): void {
   })
 
   on('ui.render', { component: 'ToolProgress' }, async ($, e, next) =>
-    (await read($, enabledAtom)) ? next({ ...e, props: { ...e.props, hint: '' } }) : next(e),
+    (await read($, enabledAtom)) && (await read($, detailAtom)) !== 'detailed'
+      ? next({ ...e, props: { ...e.props, hint: '' } })
+      : next(e),
   )
 
   // The day's history of this project, for a retro.
@@ -1418,6 +1421,7 @@ export function registerGlance(on: On): void {
         {canPause && <Button key="pause" plain label="‖ Pause" onPress={() => pauseJob($)} />}
         {canContinue && <Button key="continue" plain label="▶ Continue" onPress={() => continueJob($)} />}
         <Button key="history" plain label="☰ History" onPress={() => showHistory($, dayKey(current), true)} />
+        {list0 !== null && (
         <Button
           key="handoff"
           plain
@@ -1430,6 +1434,7 @@ export function registerGlance(on: On): void {
           }
           onPress={() => pressHandoff($)}
         />
+        )}
       </Box>
     ) : null
     const usageParts = [
@@ -1498,7 +1503,15 @@ export function registerGlance(on: On): void {
     if (list === null) {
       return (
         <Box flexDirection="column" width={columns}>
-          {row(<Text> </Text>)}
+          {row(
+            isEnabled ? (
+              <Text dimColor wrap="truncate-end">
+                {fit("Ask Claude for something: its plan shows here", headerWidth).trimEnd()}
+              </Text>
+            ) : (
+              <Text> </Text>
+            ),
+          )}
           {warnings}
           {actions}
         </Box>
@@ -1532,8 +1545,8 @@ export function registerGlance(on: On): void {
         <Text wrap="truncate-end" dimColor>
           {fit(
             list.stopKind === 'pause'
-              ? `‖ Paused · ${list.title} · press Continue to pick up`
-              : `■ Stopped · ${list.title} · you pressed Esc`,
+              ? `‖ Paused · press Continue to pick up · ${list.title}`
+              : `■ Stopped · you pressed Esc · ${list.title}`,
             headerWidth,
           ).trimEnd()}
         </Text>
@@ -1659,7 +1672,7 @@ export function registerGlance(on: On): void {
               <Text dimColor>○ </Text>
               <Text dimColor>{fit(one.name, nameWidth)}</Text>
               <Text dimColor> {'░'.repeat(METER)} </Text>
-              <Text dimColor>{index === firstUpcoming ? 'Next' : 'Up next'}</Text>
+              <Text dimColor>{index === firstUpcoming ? 'Next' : 'Later'}</Text>
             </Box>
           ),
         })
@@ -1708,10 +1721,25 @@ export function registerGlance(on: On): void {
       }
     })
 
-    // Window the lines so the current step (and what runs under it) stays in view.
+    // Window the lines so the current step (and what runs under it) stays in view,
+    // and say how many steps are out of view.
     const focus = Math.max(0, lines.findIndex(one => one.isActive))
-    const first = Math.min(Math.max(0, focus - 1), Math.max(0, lines.length - room))
-    const rows = lines.slice(first, first + room).map(one => one.element)
+    const windowAt = (size: number) => Math.min(Math.max(0, focus - 1), Math.max(0, lines.length - size))
+    const stepsIn = (from: number, to: number) => lines.slice(from, to).filter(one => one.key.startsWith('task-')).length
+    const isCut = stepsIn(0, windowAt(room)) + stepsIn(windowAt(room) + room, lines.length) > 0
+    const shown = isCut ? Math.max(1, room - 1) : room
+    const first = windowAt(shown)
+    const above = stepsIn(0, first)
+    const below = stepsIn(first + shown, lines.length)
+    const rows = lines.slice(first, first + shown).map(one => one.element)
+    if (above + below > 0) {
+      const more = [above > 0 ? `${above} earlier` : '', below > 0 ? `${below} more ${below === 1 ? 'step' : 'steps'}` : '']
+      rows.push(
+        <Text key="more" dimColor wrap="truncate-end">
+          {`  … ${more.filter(Boolean).join(' · ')}`}
+        </Text>,
+      )
+    }
 
     return (
       <Box flexDirection="column" width={columns}>

@@ -2,46 +2,66 @@
 
 ## Glance
 
-**See what Claude is doing, at a glance.**
+**See what Claude is doing, at a glance.** A calm checklist above the prompt: the plan, the step Claude is on, how far along it is, and a clear signal when Claude needs you.
 
 ![Glance: a calm checklist above the prompt, filling in as Claude works](docs/glance-demo.gif)
 
 <sub>A scripted job: the checklist frames are drawn by Glance itself; the window around them is illustrative.</sub>
 
-Glance makes Claude Code calm and friendly for people who aren't technical. While Claude works, tool calls, file diffs and command output are hidden, and one checklist sits above the prompt: the plan, what is happening now and how far along it is.
+### Install
 
+You need:
+
+- Claude Code 2.1.288 or later, in the terminal or the Desktop app's Code tab.
+- Mods turned on for your account. Run `claude plugin test` in any folder: "served off" means they aren't on yet.
+
+Then run:
+
+```bash
+claude plugin marketplace add Antreas-Strb/claude-mods
 ```
-Build my landing page · 60% · about 4m left               [ ● Glance: Simple ]
-✓ Read your brand notes       ██████████ Done
-▶ Build the pricing section   ██████░░░░ 60%
-  ↳ ◐ Find the pricing data   Explore
-○ Add the contact form        ░░░░░░░░░░ Next
-○ Polish the footer           ░░░░░░░░░░ Up next
+
+```bash
+claude plugin install glance@claude-mods
 ```
+
+Then open a new chat.
+
+**Update:** `claude plugin marketplace update claude-mods`, then `claude plugin update glance@claude-mods`, then open a new chat.
+
+**Coming from Clean View?** Glance is its new name. Uninstall the old one first (`claude plugin uninstall clean-view@claude-mods`), then install `glance@claude-mods`. `/simple` still works as another name for `/glance`.
+
+**Remove:** `claude plugin uninstall glance@claude-mods`.
+
+### For everyone, and for engineers
+
+The button above the prompt cycles **Simple → Details → Off**. The view and on/off are remembered after a restart.
+
+- **Simple**, for people who aren't technical: tool calls, file diffs and command output are hidden. You see only the checklist, plain-English step names and Claude's answers.
+- **Details**, for software engineers: the checklist stays, **and the tool calls, diffs and command output stay in view too**. Each step also shows:
+  - its bar filling gradually from a time estimate, with running time and time left, e.g. `62% 1m 52s · ~1m left`; finished steps show how long they took
+  - each helper's type, model and effort, e.g. `Explore · Haiku 4.5 · low effort`
+  - tokens per step, new ones first, then the cheaper ones read back from the prompt cache, e.g. `3k new · 45k cached`; Claude's final answer counts in the job's total only
+  - plan usage all the time, e.g. `Plan usage: 5-hour 42% · weekly 18% · chat 34% full`
+- **Off**: Claude Code as usual. Only the password guard stays on.
+
+![Glance Details: bars fill with time and time left, a Haiku helper under its step, tokens per step and plan usage](docs/glance-details.gif)
+
+<sub>Details on a scripted job, with time sped up. The tool rows in the chat above the checklist are not shown here.</sub>
+
+### What you get
 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
-- **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and, after two steps, about how long is left.
-- **Status at a glance:** Working, **Needs you** (a permission prompt, a question, or Claude waiting for your reply, each saying where to answer; never while Claude only waits for its own helpers), Stuck (with the reason in one sentence), Stopped (you pressed Esc), Still working in the background, and All done. All done shrinks to one line after 5 seconds.
+- **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and, after two steps, about how long is left. A long plan says how many steps are out of view.
+- **Status at a glance:** every status says what is happening and, when Claude needs you, where to answer. Claude waiting for its own helpers is never **Needs you**.
 - **Helpers and background work:** subagents and background tasks show under the step that started them. Glance doesn't say All done while they still run.
 - **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when Glance is off.
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
 - **Plan limits:** a warning shows at 80% of a plan window (red at 95%), and a "Tidy it up" button appears when the chat gets long.
 
-### One button, three views
+### What each status means
 
-The button above the prompt cycles **Simple → Details → Off**. Both the view and on/off are remembered after a restart.
-
-**Details** (or `/glance details`) also shows:
-
-- the current step's bar filling gradually from a time estimate, with its running time and time left, e.g. `62% 1m 52s · ~1m left`; finished steps show how long they took
-- each helper's type, model and effort, e.g. `Explore · Haiku 4.5 · low effort`
-- tokens per step: new ones first, then the cheaper ones read back from the prompt cache, e.g. `3k new · 45k cached`. Claude's final answer counts in the job's total only
-- the job's total tokens
-- plan usage all the time, e.g. `Plan usage: 5-hour 42% · weekly 18% · chat 34% full`
-
-![Glance Details: bars fill with time and time left, a Haiku helper under its step, tokens per step and plan usage](docs/glance-details.gif)
-
-<sub>The same kind of scripted job in Details, with time sped up.</sub>
+![Each status Glance shows, with what it means and what to do](docs/glance-states.png)
 
 ### Pause and Continue
 
@@ -63,7 +83,7 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 
 ### Fresh chat (handoff)
 
-**↻ Fresh chat** under the checklist (or `/glance handoff`) moves the work to a fresh chat: when a chat is too long, close to its limits, or whenever you want a clean start. Press it twice (the first press asks to confirm). Claude writes a short handoff note (goal, what is done, what is left, decisions, the next step), the chat is cleared, and the note is sent as the fresh chat's first message. The note is also saved: `/glance handoff note` puts the last one back in the prompt box.
+**↻ Fresh chat** under the checklist (or `/glance handoff`), shown once the chat has some work in it, moves the work to a fresh chat: when a chat is too long, close to its limits, or whenever you want a clean start. Press it twice (the first press asks to confirm). Claude writes a short handoff note (goal, what is done, what is left, decisions, the next step), the chat is cleared, and the note is sent as the fresh chat's first message. The note is also saved: `/glance handoff note` puts the last one back in the prompt box.
 
 ### Commands
 
@@ -71,8 +91,8 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 |---|---|
 | `/glance` | Turns Glance on or off |
 | `/glance on`, `/glance off` | Turns it on or off |
-| `/glance details` | Turns the details view on or off |
-| `/glance details on`, `/glance details off` | Turns the details view on or off |
+| `/glance details` | Switches between Simple and Details |
+| `/glance details on`, `/glance details off` | Picks Details or Simple |
 | `/glance history` | Shows today's jobs in this project |
 | `/glance history yesterday`, `/glance history 2026-10-06` | Shows another day |
 | `/glance pause`, `/glance continue` | Pauses Claude, or picks the job up again |
@@ -80,29 +100,6 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glance handoff note` | Puts the last handoff note in the prompt box |
 
 The button above the prompt cycles Simple, Details and Off.
-
-### Requirements
-
-- Claude Code 2.1.288 or later, in the terminal or the Desktop app's Code tab.
-- Mods turned on for your account. Run `claude plugin test` in any folder: "served off" means they aren't on yet.
-
-### Install
-
-```bash
-claude plugin marketplace add Antreas-Strb/claude-mods
-```
-
-```bash
-claude plugin install glance@claude-mods
-```
-
-Then open a new chat.
-
-**Update:** `claude plugin marketplace update claude-mods`, then `claude plugin update glance@claude-mods`, then open a new chat.
-
-**Coming from Clean View?** Glance is its new name. Uninstall the old one first (`claude plugin uninstall clean-view@claude-mods`), then install `glance@claude-mods`. `/simple` still works as another name for `/glance`.
-
-**Remove:** `claude plugin uninstall glance@claude-mods`.
 
 ### Limits
 
