@@ -1,14 +1,14 @@
 {
   "name": "claude-mods",
-  "description": "Glance for Claude Code: a calm checklist above the prompt with the plan, progress and when Claude needs you",
+  "description": "GlanceFlow for Claude Code: a calm checklist above the prompt with the plan, progress and when Claude needs you",
   "owner": {
     "name": "Antreas-Strb"
   },
   "plugins": [
     {
-      "name": "glance",
-      "source": "./glance",
-      "description": "A calm checklist above the prompt: the plan, the current step, progress, helpers and when Claude needs you. Simple view for everyone, Details (with code in view) for engineers. History, team report, pause and handoff (/glance)"
+      "name": "glanceflow",
+      "source": "./glanceflow",
+      "description": "A calm checklist above the prompt: the plan, the current step, progress, helpers and when Claude needs you. Simple view for everyone, Details (with code in view) for engineers. History, team report, pause and handoff (/glanceflow)"
     }
   ]
 }

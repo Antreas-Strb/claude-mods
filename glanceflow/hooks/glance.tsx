@@ -25,7 +25,7 @@ import {
 } from './history'
 import { findSecrets, maskPrivate } from './privacy'
 
-const PLUGIN = 'glance'
+const PLUGIN = 'glanceflow'
 const PLAN_TOOL = `mcp__${PLUGIN}__plan_steps`
 const PROGRESS_TOOL = `mcp__${PLUGIN}__report_progress`
 const ALWAYS_ALLOWED = new Set([
@@ -64,17 +64,17 @@ const PERMISSION = "Answer Claude's request in the chat"
 const QUESTION = "Answer Claude's question in the chat"
 const WAITING = 'Reply to Claude in the box below'
 
-const enabledAtom = atom({ plugin: 'glance', key: 'glanceEnabled' } as const, true)
-const detailAtom = atom({ plugin: 'glance', key: 'detailLevel' } as const, 'simple')
-const checklistAtom = atom({ plugin: 'glance', key: 'checklist' } as const, null)
-const tickAtom = atom({ plugin: 'glance', key: 'tick' } as const, 0)
+const enabledAtom = atom({ plugin: 'glanceflow', key: 'glanceEnabled' } as const, true)
+const detailAtom = atom({ plugin: 'glanceflow', key: 'detailLevel' } as const, 'simple')
+const checklistAtom = atom({ plugin: 'glanceflow', key: 'checklist' } as const, null)
+const tickAtom = atom({ plugin: 'glanceflow', key: 'tick' } as const, 0)
 const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null, contextPercent: null, costUsd: null }
-const usageAtom = atom({ plugin: 'glance', key: 'usage' } as const, NO_USAGE)
-const soundAtom = atom({ plugin: 'glance', key: 'soundMode' } as const, 'off')
-const calmAtom = atom({ plugin: 'glance', key: 'isCalm' } as const, false)
-const historyAtom = atom({ plugin: 'glance', key: 'historyView' } as const, null)
-const HISTORY_PANE = 'glance-history'
-const handoffAtom = atom({ plugin: 'glance', key: 'handoffState' } as const, 'idle')
+const usageAtom = atom({ plugin: 'glanceflow', key: 'usage' } as const, NO_USAGE)
+const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off')
+const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
+const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
+const HISTORY_PANE = 'glanceflow-history'
+const handoffAtom = atom({ plugin: 'glanceflow', key: 'handoffState' } as const, 'idle')
 const HANDOFF_CONFIRM_MS = 8000
 // What the Continue button sends, as the person's own words; turn.start knows it and keeps the job going.
 const CONTINUE_TEXT = 'Please continue where you left off.'
@@ -83,7 +83,7 @@ Cover, briefly: the goal; what is already done; what is left, in order; decision
 or links that matter; and the very next step. Under 300 words, no preamble.
 Start with exactly: "Continuing from an earlier chat. Here is where things stand:"`
 
-const PROMPT_SECTION = `# Glance (progress checklist)
+const PROMPT_SECTION = `# GlanceFlow (progress checklist)
 The person follows your work on a checklist above the prompt, in plain English.
 - A question you can answer straight away, with no tools, needs no plan: just answer.
 - Before you use any other tool, call plan_steps (tool ${PLAN_TOOL}) with 2 to 8 steps in order. If it is deferred, load it with ToolSearch first. If this session has TodoWrite or TaskCreate you may use that to-do list as the plan instead.
@@ -684,12 +684,12 @@ const startFreshChat = async ($: $) => {
       return
     }
     const note = reply.text.trim()
-    // Kept in case anything below fails: /glance handoff note puts it back in the prompt box.
+    // Kept in case anything below fails: /glanceflow handoff note puts it back in the prompt box.
     await $.store.set(HANDOFF_KEY, { at: await now($), note })
     try {
       await $.command.run({ command: 'clear', args: '' })
     } catch {
-      $.ui.toast("Couldn't clear the chat. Type /glance handoff note to get the handoff note.")
+      $.ui.toast("Couldn't clear the chat. Type /glanceflow handoff note to get the handoff note.")
       return
     }
     try {
@@ -822,7 +822,7 @@ const tidyUp = async ($: $) => {
     if (done.skip !== undefined) $.ui.toast(`The chat was not tidied up: ${done.skip}`)
     return
   } catch (refused) {
-    $.ui.log(`glance: compaction refused: ${refused instanceof Error ? refused.message : String(refused)}`, { to: 'debug' })
+    $.ui.log(`glanceflow: compaction refused: ${refused instanceof Error ? refused.message : String(refused)}`, { to: 'debug' })
   }
   try {
     await $.command.run({ command: 'compact', args: '' })
@@ -854,7 +854,7 @@ const measureUsage = async ($: $, usage: GlanceUsage) => {
 const setEnabled = async ($: $, isEnabled: boolean) => {
   await update($, enabledAtom, () => isEnabled)
   await $.store.set(STORE_KEY, isEnabled)
-  $.ui.toast(isEnabled ? 'Glance is on: tool details are hidden' : 'Glance is off: showing everything')
+  $.ui.toast(isEnabled ? 'GlanceFlow is on: tool details are hidden' : 'GlanceFlow is off: showing everything')
 }
 
 /** The one button: Simple → Details → Off → Simple. */
@@ -867,10 +867,10 @@ const cycleMode = async ($: $, isEnabled: boolean, isDetailed: boolean) => {
   await $.store.set(DETAIL_KEY, nextDetailed ? 'detailed' : 'simple')
   $.ui.toast(
     !nextEnabled
-      ? 'Glance is off: showing everything'
+      ? 'GlanceFlow is off: showing everything'
       : nextDetailed
-        ? 'Glance details: models, time, tokens, cache and plan usage'
-        : 'Glance simple: just the steps and progress',
+        ? 'GlanceFlow details: models, time, tokens, cache and plan usage'
+        : 'GlanceFlow simple: just the steps and progress',
   )
 }
 
@@ -882,8 +882,46 @@ const setDetail = async ($: $, isDetailed: boolean) => {
   )
 }
 
+// GlanceFlow was called Glance until 0.9: once, bring over Glance's settings and history from its own store file.
+const ADOPTED_KEY = 'adoptedGlance'
+const adoptGlanceStore = async ($: $) => {
+  if (await $.store.get(ADOPTED_KEY)) {
+    return
+  }
+  await $.store.set(ADOPTED_KEY, true)
+  try {
+    const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
+    const dir = `${config}/plugins/store`
+    const settings = new Set([STORE_KEY, DETAIL_KEY, SOUND_KEY, CALM_KEY])
+    const mine = new Set(await $.store.keys())
+    for (const file of await $.fs.list(dir)) {
+      if (!/^glance_.*\.json$/.test(file.name)) {
+        continue
+      }
+      const old = JSON.parse(await $.fs.read(`${dir}/${file.name}`)) as Record<string, unknown>
+      for (const [key, value] of Object.entries(old)) {
+        if (key.startsWith(HISTORY_PREFIX) && Array.isArray(value)) {
+          let entries = await $.store.get(key)
+          // Only Glance's own jobs: another mod may be called glance too.
+          for (const entry of value as GlanceHistoryEntry[]) {
+            if (typeof entry?.jobId === 'string' && Array.isArray(entry.doneSteps)) {
+              entries = upsertEntry(entries, entry)
+            }
+          }
+          await $.store.set(key, entries ?? [])
+        } else if (settings.has(key) && !mine.has(key)) {
+          await $.store.set(key, value)
+        }
+      }
+    }
+  } catch {
+    // Nothing to bring over.
+  }
+}
+
 export function registerGlance(on: On): void {
   on('session.start', async ($, e, next) => {
+    await adoptGlanceStore($)
     const stored = await $.store.get(STORE_KEY)
     await update($, enabledAtom, () => stored !== false)
     const detail = await $.store.get(DETAIL_KEY)
@@ -930,21 +968,17 @@ export function registerGlance(on: On): void {
       },
     })
     await $.command.register({
-      name: 'glance',
+      name: 'glanceflow',
       description:
-        'Glance: /glance on|off, details on|off, sound on|voice|off, calm on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
     })
-    // Another mod is called glance too: this name never clashes.
-    await $.command.register({ name: 'glance-checklist', description: 'Same as /glance' })
-    // The name Glance had before, kept so old habits still work.
-    await $.command.register({ name: 'simple', description: 'Same as /glance' })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
 
     return next(e)
   })
 
-  on('command.run', { command: ['glance', 'glance-checklist', 'simple'] }, async ($, e) => {
+  on('command.run', { command: ['glanceflow'] }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg.startsWith('sound')) {
       const choice = arg.slice('sound'.length).trim()
@@ -973,7 +1007,7 @@ export function registerGlance(on: On): void {
     if (arg.startsWith('history')) {
       const day = dayFromArgument(arg.slice('history'.length), await now($))
       if (day === null) {
-        return { text: 'Try /glance history, /glance history yesterday or /glance history 2026-10-06.' }
+        return { text: 'Try /glanceflow history, /glanceflow history yesterday or /glanceflow history 2026-10-06.' }
       }
       const opened = await showHistory($, day, true)
       const entries = (await read($, historyAtom))?.entries ?? []
@@ -1009,12 +1043,12 @@ export function registerGlance(on: On): void {
         choice === 'on' ? true : choice === 'off' ? false : (await read($, detailAtom)) !== 'detailed'
       await setDetail($, isDetailed)
 
-      return { text: isDetailed ? 'Glance details are on.' : 'Glance details are off.' }
+      return { text: isDetailed ? 'GlanceFlow details are on.' : 'GlanceFlow details are off.' }
     }
     const isEnabled = arg === 'on' ? true : arg === 'off' ? false : !(await read($, enabledAtom))
     await setEnabled($, isEnabled)
 
-    return { text: isEnabled ? 'Glance is on.' : 'Glance is off.' }
+    return { text: isEnabled ? 'GlanceFlow is on.' : 'GlanceFlow is off.' }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -1044,7 +1078,7 @@ export function registerGlance(on: On): void {
     }
     await holdSecretMessage($, e.text, kinds)
 
-    return { drop: 'The message looked like it held a password or key, so Glance held it back.' }
+    return { drop: 'The message looked like it held a password or key, so GlanceFlow held it back.' }
   })
 
   on('session.measure', async ($, e, next) => {
@@ -1437,7 +1471,7 @@ export function registerGlance(on: On): void {
     if (view === null) {
       return (
         <Box flexDirection="column">
-          <Text dimColor>Type /glance history to see today's tasks.</Text>
+          <Text dimColor>Type /glanceflow history to see today's tasks.</Text>
           {close}
         </Box>
       )
@@ -1658,7 +1692,7 @@ export function registerGlance(on: On): void {
     const button = (
       <Button
         key="toggle"
-        label={!isEnabled ? '○ Glance: Off' : isDetailed ? '● Glance: Details' : '● Glance: Simple'}
+        label={!isEnabled ? '○ GlanceFlow: Off' : isDetailed ? '● GlanceFlow: Details' : '● GlanceFlow: Simple'}
         variant={isEnabled ? 'primary' : 'secondary'}
         onPress={() => cycleMode($, isEnabled, isDetailed)}
       />

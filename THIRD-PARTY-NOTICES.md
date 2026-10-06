@@ -1,6 +1,6 @@
 # Third-party notices
 
-Parts of `glance/hooks/privacy.ts` are adapted from Recording Mode in [nateherkai/claude-code-mods](https://github.com/nateherkai/claude-code-mods), used under the MIT licence below.
+Parts of `glanceflow/hooks/privacy.ts` are adapted from Recording Mode in [nateherkai/claude-code-mods](https://github.com/nateherkai/claude-code-mods), used under the MIT licence below.
 
 ```
 MIT License

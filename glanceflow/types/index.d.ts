@@ -135,7 +135,7 @@ export type GlanceHistoryView = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'glance': {
+    'glanceflow': {
       glanceEnabled: boolean
       /** `simple`: steps, progress and time. `detailed`: also models, effort, tokens, cache and plan usage. */
       detailLevel: 'simple' | 'detailed'

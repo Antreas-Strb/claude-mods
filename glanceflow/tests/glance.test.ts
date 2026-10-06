@@ -6,11 +6,11 @@ import { activityOf, carryTokens, cleanName, fit, formatCost, formatTokens, head
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, shiftDay, teamReport } from '../hooks/history'
 
-const PLAN = 'mcp__glance__plan_steps'
-const PROGRESS = 'mcp__glance__report_progress'
+const PLAN = 'mcp__glanceflow__plan_steps'
+const PROGRESS = 'mcp__glanceflow__report_progress'
 const SURFACES = ['terminal', 'desktop'] as const
 const BAND = {
-  plugin: 'glance',
+  plugin: 'glanceflow',
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,
@@ -41,7 +41,7 @@ function world(on: On) {
 
 /** Turns on the detailed view: models, tokens, cache and plan usage. */
 async function detailsOn($: Engine) {
-  await $.command.run({ command: 'glance', args: 'details on' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'details on' } as never)
 }
 
 async function texts($: Engine, surface: (typeof SURFACES)[number], bodyColumns = 80): Promise<string[]> {
@@ -99,7 +99,7 @@ test('a to-do list plus a 60% report draws done, current, next and up next rows'
     expect(shown).toContain('60%')
     expect(shown).toContain('Next')
     expect(shown).toContain('Later')
-    expect(shown).toContain('Glance: Simple')
+    expect(shown).toContain('GlanceFlow: Simple')
   }
 })
 
@@ -116,15 +116,15 @@ test('a permission prompt shows Needs you', async ($, on) => {
   }
 })
 
-test('/glance off hides the band but keeps the button', async ($, on) => {
+test('/glanceflow off hides the band but keeps the button', async ($, on) => {
   world(on)
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
-  await $.command.run({ command: 'glance', args: 'off' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'off' } as never)
 
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).not.toContain('Understand your request')
-    expect(shown).toContain('Glance: Off')
+    expect(shown).toContain('GlanceFlow: Off')
   }
 })
 
@@ -257,7 +257,7 @@ test('overall progress, time left and a grown plan show in the header and footer
   expect(shown).toContain('38%')
   expect(shown).toContain('about 5m left')
 
-  const footer = await $.ui.mount({ plugin: 'glance', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
+  const footer = await $.ui.mount({ plugin: 'glanceflow', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
   expect((await footer.find({ type: 'Text' }))?.text).toContain('◎ 38% · ~5m')
   await footer.unmount()
 
@@ -578,7 +578,7 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
   for (const surface of SURFACES) {
     const simple = (await texts($, surface, 120)).join('\n')
     expect(simple).toContain('Find the prices')
-    expect(simple).toContain('Glance: Simple')
+    expect(simple).toContain('GlanceFlow: Simple')
     expect(simple).not.toContain('Haiku 4.5')
     expect(simple).not.toContain('tokens')
     expect(simple).not.toContain('cached')
@@ -589,7 +589,7 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
   await ui.press({ key: 'toggle' })
   await ui.unmount()
   const detailed = (await texts($, 'terminal', 120)).join('\n')
-  expect(detailed).toContain('Glance: Details')
+  expect(detailed).toContain('GlanceFlow: Details')
   expect(detailed).toContain('Explore · Haiku 4.5')
   expect(detailed).toContain('2.4k new · 10k cached')
   expect(detailed).toContain('Plan usage: 5-hour 42%')
@@ -624,13 +624,13 @@ test('one button cycles Simple, Details and Off', async ($, on) => {
     await ui.press({ key: 'toggle' })
     await ui.unmount()
   }
-  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Simple')
+  expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Simple')
   await press()
-  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Details')
+  expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Details')
   await press()
-  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Off')
+  expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Off')
   await press()
-  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Simple')
+  expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Simple')
 })
 
 test('in details, the current step fills gradually and shows its time; done steps show how long they took', async ($, on) => {
@@ -698,9 +698,9 @@ test("Claude's final answer counts in the job's total, not in the last step", as
 })
 
 const PANE = {
-  plugin: 'glance',
+  plugin: 'glanceflow',
   component: 'Pane',
-  requestId: 'glance-history',
+  requestId: 'glanceflow-history',
   props: { title: 'History', isFocused: true, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
@@ -740,7 +740,7 @@ describe('history days', () => {
   })
 })
 
-test("each finished job is saved, and /glance history shows the day's jobs for this project", async ($, on) => {
+test("each finished job is saved, and /glanceflow history shows the day's jobs for this project", async ($, on) => {
   const clock = mock.clock(on, { now: new Date(2026, 9, 6, 9, 42).getTime() })
   mock.store(on)
   const project = { cwd: '/work/landing-site' }
@@ -772,7 +772,7 @@ test("each finished job is saved, and /glance history shows the day's jobs for t
   await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer' })
   project.cwd = '/work/landing-site'
 
-  const result = await $.command.run({ command: 'glance', args: 'history' } as never)
+  const result = await $.command.run({ command: 'glanceflow', args: 'history' } as never)
   expect(result.text).toBe(`History for ${dayKey(clock.now())}: 2 tasks.`)
 
   const shown = (await paneTexts($)).join('\n')
@@ -789,7 +789,7 @@ test("each finished job is saved, and /glance history shows the day's jobs for t
 test('a day with nothing saved says so', async ($, on) => {
   world(on)
   historyWorld(on, { cwd: '/work/landing-site' })
-  await $.command.run({ command: 'glance', args: 'history 2026-01-01' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'history 2026-01-01' } as never)
   expect((await paneTexts($)).join('\n')).toContain('No tasks saved for this project on that day yet.')
 })
 
@@ -833,7 +833,7 @@ test('before any work the band says where the plan will show, without a Fresh ch
 test('Details keeps the tool rows in view; Simple hides them', async ($, on) => {
   world(on)
   const PROGRESS_ROW = {
-    plugin: 'glance',
+    plugin: 'glanceflow',
     component: 'ToolProgress',
     props: { tool_use_id: 'tu1', kind: 'background_hint', hint: '(ctrl+b to run in background)' },
   } as const
@@ -885,7 +885,7 @@ test('with room for one row, the current step is the one shown', async ($, on) =
   expect(shown).not.toContain('One ')
 })
 
-test('the band has History and Fresh chat buttons while Glance is on', async ($, on) => {
+test('the band has History and Fresh chat buttons while GlanceFlow is on', async ($, on) => {
   world(on)
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   for (const surface of SURFACES) {
@@ -893,7 +893,7 @@ test('the band has History and Fresh chat buttons while Glance is on', async ($,
     expect(shown).toContain('☰ History')
     expect(shown).toContain('↻ Fresh chat')
   }
-  await $.command.run({ command: 'glance', args: 'off' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'off' } as never)
   const off = (await texts($, 'terminal')).join('\n')
   expect(off).not.toContain('☰ History')
 })
@@ -932,7 +932,7 @@ test('the History button opens the panel; the day picker moves between days', as
   expect(pane).toContain('Later ▶')
 
   const picker = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await $.ui.select({ plugin: 'glance', key: 'day', value: dayKey(clock.now()) })
+  await $.ui.select({ plugin: 'glanceflow', key: 'day', value: dayKey(clock.now()) })
   await picker.unmount()
   expect((await paneTexts($)).join('\n')).toContain('No tasks saved')
   expect(shiftDay('2026-10-01', -1)).toBe('2026-09-30')
@@ -953,7 +953,7 @@ test('Team report shows the report and copies it', async ($, on) => {
     copied = e.text
     return { value: { isCopied: true } } as never
   })
-  await $.command.run({ command: 'glance', args: 'history' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'report' })
@@ -1072,7 +1072,7 @@ test("a paused step's time stands still", async ($, on) => {
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
   await clock.advance(30_000)
-  await $.command.run({ command: 'glance', args: 'pause' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'pause' } as never)
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
 
   const before = (await texts($, 'terminal', 120)).join('\n')
@@ -1083,16 +1083,8 @@ test("a paused step's time stands still", async ($, on) => {
   expect(after).not.toContain('5m 30s')
 })
 
-test('/simple still works as another name for /glance', async ($, on) => {
-  world(on)
-  await $.command.run({ command: 'simple', args: 'off' } as never)
-  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Off')
-  await $.command.run({ command: 'glance', args: 'on' } as never)
-  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Simple')
-})
 
-
-/** A world with a clock to move, and the sounds and words Glance plays. */
+/** A world with a clock to move, and the sounds and words GlanceFlow plays. */
 function soundWorld(on: On) {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
@@ -1122,7 +1114,7 @@ test('sounds are off until turned on; then a chime when Claude needs you, gets s
   await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
   expect(heard).toEqual([])
 
-  const result = await $.command.run({ command: 'glance', args: 'sound on' } as never)
+  const result = await $.command.run({ command: 'glanceflow', args: 'sound on' } as never)
   expect(result.text).toContain('Sounds are on')
   heard.length = 0
   await callTool($, { tool: 'Bash', command: 'ls' })
@@ -1142,7 +1134,7 @@ test('sounds are off until turned on; then a chime when Claude needs you, gets s
 
 test('voice mode also says it in a few words', async ($, on) => {
   const { clock, heard } = soundWorld(on)
-  await $.command.run({ command: 'glance', args: 'sound voice' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'sound voice' } as never)
   heard.length = 0
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
@@ -1153,7 +1145,7 @@ test('voice mode also says it in a few words', async ($, on) => {
 
 test('a finished job with helpers still running chimes only when they finish', async ($, on) => {
   const { clock, heard } = soundWorld(on)
-  await $.command.run({ command: 'glance', args: 'sound on' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'sound on' } as never)
   heard.length = 0
   await $.turn.start({ text: 'Merge the pull request', turnId: 't1' })
   await callTool($, { tool: PLAN, steps: ['Merge it', 'Watch the checks'] })
@@ -1212,7 +1204,7 @@ test('calm mode: nothing moves, and statuses read in bold', async ($, on) => {
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
-  const result = await $.command.run({ command: 'glance', args: 'calm on' } as never)
+  const result = await $.command.run({ command: 'glanceflow', args: 'calm on' } as never)
   expect(result.text).toContain('Calm mode is on')
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   await callTool($, { tool: PLAN, steps: ['Read notes', 'Write copy'] })
@@ -1251,21 +1243,14 @@ test("in details, a job shows what it cost, and the history keeps it", async ($,
   await measure(1.42)
   expect((await texts($, 'terminal', 120)).join('\n')).toContain('$0.42')
   // Simple keeps money out of view.
-  await $.command.run({ command: 'glance', args: 'details off' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'details off' } as never)
   expect((await texts($, 'terminal', 120)).join('\n')).not.toContain('$0.42')
 
   await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
   await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
-  await $.command.run({ command: 'glance', args: 'history' } as never)
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
   const pane = (await paneTexts($)).join('\n')
   expect(pane).toContain('$0.42')
-})
-
-test('/glance-checklist works like /glance, so it never clashes with another mod called glance', async ($, on) => {
-  world(on)
-  const result = await $.command.run({ command: 'glance-checklist', args: 'details on' } as never)
-  expect(result.text).toBe('Glance details are on.')
-  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Details')
 })
 
 /** A long chat, so the band offers Tidy it up; the test says what compaction and /compact do. */
@@ -1307,4 +1292,47 @@ test('when /compact fails too, Tidy it up says why', async ($, on) => {
   })
   // The engine's reason shows in brackets, so the next report says what went wrong.
   expect(toasts.join('\n')).toMatch(/Couldn't tidy up the chat \(.+\)\. Type \/compact to try again\./)
+})
+
+test("once, GlanceFlow brings over Glance's settings and history; another mod's store is left alone", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const store = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: store.get(e.key) }) as never)
+  on('store.set', (_, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined } as never
+  })
+  on('store.delete', (_, e) => {
+    store.delete(e.key)
+    return { value: undefined } as never
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }) as never)
+  mock.env(on, { HOME: '/home/me' })
+  const job = { jobId: 'j1', project: '/work', startedAt: 1, finishedAt: 2, title: 'Build the page', outcome: 'done', stepsDone: 1, stepsTotal: 1, newTokens: 0, cachedTokens: 0, doneSteps: ['Build the page'], openSteps: [], isQuickAnswer: false }
+  const files: Record<string, unknown> = {
+    'glance_claude-mods-1a2b.json': { 'history:2026-10-06': [job], glanceDetail: 'detailed', glanceSound: 'chime' },
+    'glance_other-3c4d.json': { 'history:2026-10-06': [{ id: 'not ours' }], enabled: false },
+    'notes_x-5e6f.json': { glanceCalm: true },
+  }
+  const reads: string[] = []
+  on('fs.list', (_, e) => {
+    expect(e.path).toBe('/home/me/.claude/plugins/store')
+    return { value: Object.keys(files).map(name => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) } as never
+  })
+  on('fs.read', (_, e) => {
+    reads.push(e.path)
+    return { value: JSON.stringify(files[e.path.split('/').pop()!]) } as never
+  })
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+
+  expect(store.get('history:2026-10-06')).toEqual([job])
+  expect(store.get('glanceDetail')).toBe('detailed')
+  expect(store.get('glanceSound')).toBe('chime')
+  expect(store.get('glanceEnabled')).toBeUndefined()
+  expect(store.get('glanceCalm')).toBeUndefined()
+  expect(reads).toHaveLength(2)
 })
