@@ -1,7 +1,27 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On, RenderChildren, Timer } from 'claude-code'
+import type { EngineInterface, On, RenderChildren, RenderSurface, Timer } from 'claude-code'
 
-import type { CleanViewChecklist, CleanViewHelper, CleanViewTask, CleanViewTaskSize, CleanViewUsage } from '../types'
+import type {
+  CleanViewChecklist,
+  CleanViewHelper,
+  CleanViewHistoryEntry,
+  CleanViewTask,
+  CleanViewTaskSize,
+  CleanViewUsage,
+} from '../types'
+import {
+  HISTORY_PREFIX,
+  clockTime,
+  dayFromArgument,
+  dayKey,
+  entryFromChecklist,
+  expiredHistoryKeys,
+  longDay,
+  projectName,
+  shiftDay,
+  teamReport,
+  upsertEntry,
+} from './history'
 import { findSecrets, maskPrivate } from './privacy'
 
 const PLUGIN = 'clean-view'
@@ -18,6 +38,7 @@ const ALWAYS_ALLOWED = new Set([
 ])
 const STORE_KEY = 'cleanViewEnabled'
 const DETAIL_KEY = 'cleanViewDetail'
+const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 const METER = 10
 const LABEL_WIDTH = 7
@@ -42,6 +63,16 @@ const checklistAtom = atom({ plugin: 'clean-view', key: 'checklist' } as const, 
 const tickAtom = atom({ plugin: 'clean-view', key: 'tick' } as const, 0)
 const NO_USAGE: CleanViewUsage = { limits: [], limitPercent: null, limitLabel: null, contextPercent: null }
 const usageAtom = atom({ plugin: 'clean-view', key: 'usage' } as const, NO_USAGE)
+const historyAtom = atom({ plugin: 'clean-view', key: 'historyView' } as const, null)
+const HISTORY_PANE = 'clean-view-history'
+const handoffAtom = atom({ plugin: 'clean-view', key: 'handoffState' } as const, 'idle')
+const HANDOFF_CONFIRM_MS = 8000
+// What the Continue button sends, as the person's own words; turn.start knows it and keeps the job going.
+const CONTINUE_TEXT = 'Please continue where you left off.'
+const HANDOFF_PROMPT = `Write a handoff note so a brand-new chat can carry on this work without this conversation.
+Cover, briefly: the goal; what is already done; what is left, in order; decisions made and why; the files, commands
+or links that matter; and the very next step. Under 300 words, no preamble.
+Start with exactly: "Continuing from an earlier chat. Here is where things stand:"`
 
 const PROMPT_SECTION = `# Clean View (progress checklist)
 The person is not technical and sees a simple checklist instead of tool calls.
@@ -377,6 +408,9 @@ let failuresInARow = 0
 // A message held back for a password: memory only, never stored, and only to let the same one through on a resend.
 let heldMessage: { text: string; at: number } | null = null
 let limitLevel = 0
+// The main loop's running turn, for the Pause button; and whether a pause asked for its end.
+let runningTurn: string | undefined
+let isPausing = false
 
 const now = ($: $) => $.clock.now()
 
@@ -419,6 +453,7 @@ const startJob = async ($: $, text: string, jobId: string) => {
     plannedCount: 0,
     extraTokens: 0,
     extraCachedTokens: 0,
+    stopKind: null,
     // Work still running from the last job stays in view.
     helpers: (previous?.helpers ?? []).filter(one => one.status === 'running'),
   }
@@ -466,6 +501,123 @@ const setNeedsYou = ($: $, reason: string) =>
 const setStuck = ($: $, reason: string) =>
   change($, list => ({ ...list, phase: 'stuck', stuckReason: reason, needsYouReason: null }))
 
+/** Stops Claude's running turn; Continue picks it up again. */
+const pauseJob = async ($: $) => {
+  if (runningTurn === undefined) {
+    $.ui.toast('Nothing is running right now.')
+    return
+  }
+  isPausing = true
+  try {
+    await $.turn.abort({ turnId: runningTurn })
+    $.ui.toast('Paused. Press Continue to pick up where Claude stopped.')
+  } catch {
+    isPausing = false
+    $.ui.toast("Couldn't pause right now. Press Esc to stop instead.")
+  }
+}
+
+/** Sends "continue" for the person: the same job goes on, nothing to type. */
+const continueJob = async ($: $) => {
+  try {
+    await $.prompt.submit({ text: CONTINUE_TEXT, asUser: true })
+  } catch {
+    $.ui.toast("Couldn't continue right now. Type: continue")
+  }
+}
+
+/** Loads one day of this project's history into the pane, and opens the pane when asked. */
+const showHistory = async ($: $, day: string, isOpening: boolean) => {
+  const project = await $.session.cwd()
+  const stored = await $.store.get(`${HISTORY_PREFIX}${day}`)
+  // Entries saved before the report fields existed get empty ones.
+  const entries = (Array.isArray(stored) ? (stored as CleanViewHistoryEntry[]) : [])
+    .filter(one => one.project === project)
+    .map(one => ({ ...one, doneSteps: one.doneSteps ?? [], openSteps: one.openSteps ?? [], isQuickAnswer: one.isQuickAnswer ?? false }))
+  const today = dayKey(await now($))
+  const saved = (await $.store.keys())
+    .filter(key => key.startsWith(HISTORY_PREFIX))
+    .map(key => key.slice(HISTORY_PREFIX.length))
+  const days = [...new Set([today, day, ...saved])].sort().reverse()
+  await update($, historyAtom, () => ({ day, project, entries, days, isReportShown: false }))
+
+  return isOpening ? $.ui.open({ id: HISTORY_PANE, title: `History · ${projectName(project)}`, closeOnEscape: true }) : null
+}
+
+const showReport = async ($: $, isShown: boolean, text: string, surface: RenderSurface) => {
+  await update($, historyAtom, view => (view ? { ...view, isReportShown: isShown } : view))
+  if (!isShown) return
+  const copied = await $.ui.copy({ text, surface })
+  $.ui.toast(
+    copied.isCopied
+      ? 'Team report copied: paste it into Slack, Teams or an email.'
+      : 'The report is in the panel: select it there to copy it.',
+  )
+}
+
+/** First press arms the Fresh chat button; a second press within 8 seconds starts the handoff. */
+const pressHandoff = async ($: $) => {
+  const state = await read($, handoffAtom)
+  if (state === 'working') return
+  if (state === 'idle') {
+    await update($, handoffAtom, () => 'armed')
+    $.clock.after(HANDOFF_CONFIRM_MS, () => {
+      void update($, handoffAtom, current => (current === 'armed' ? 'idle' : current))
+    })
+    return
+  }
+  await startFreshChat($)
+}
+
+/** Writes a handoff note over this chat, clears it, and sends the note as the fresh chat's first message. */
+const startFreshChat = async ($: $) => {
+  await update($, handoffAtom, () => 'working')
+  try {
+    $.ui.toast('Writing a handoff note for the fresh chat…')
+    const reply = await $.model.fork({ prompt: HANDOFF_PROMPT })
+    if (!reply.isAnswered || !reply.text.trim()) {
+      $.ui.toast(`Couldn't write the handoff note${reply.isAnswered ? '' : ` (${reply.reason})`}. Nothing was cleared.`)
+      return
+    }
+    const note = reply.text.trim()
+    // Kept in case anything below fails: /simple handoff note puts it back in the prompt box.
+    await $.store.set(HANDOFF_KEY, { at: await now($), note })
+    try {
+      await $.command.run({ command: 'clear', args: '' })
+    } catch {
+      $.ui.toast("Couldn't clear the chat. Type /simple handoff note to get the handoff note.")
+      return
+    }
+    try {
+      await $.prompt.submit({ text: note, asUser: true })
+      $.ui.toast('Fresh chat started from a handoff note.')
+    } catch {
+      await $.prompt.fill({ text: note })
+      $.ui.toast('Chat cleared. The handoff note is in the prompt box: press Enter to send it.')
+    }
+  } finally {
+    await update($, handoffAtom, () => 'idle')
+  }
+}
+
+/** Saves the job to the day's history (this computer only) and refreshes an open history pane. */
+const recordJob = async ($: $) => {
+  try {
+    const list = await read($, checklistAtom)
+    if (list === null) return
+    const project = await $.session.cwd()
+    const day = dayKey(list.startedAt)
+    const entries = upsertEntry(await $.store.get(`${HISTORY_PREFIX}${day}`), entryFromChecklist(list, project))
+    await $.store.set(`${HISTORY_PREFIX}${day}`, entries)
+    const view = await read($, historyAtom)
+    if (view !== null && view.day === day && view.project === project) {
+      await update($, historyAtom, () => ({ ...view, entries: entries.filter(one => one.project === project) }))
+    }
+  } catch {
+    // The history is a convenience: a failed save never gets in the way of the work.
+  }
+}
+
 /** Once Claude has answered: done, or still working in the background while helpers run. */
 const settleFinished = async ($: $, at: number, isNewAnswer: boolean) => {
   let changed = isNewAnswer
@@ -477,6 +629,7 @@ const settleFinished = async ($: $, at: number, isNewAnswer: boolean) => {
     return { ...current, phase, finishedAt: phase === 'done' ? at : null, isCollapsed: false }
   })
   if (!changed || list === null) return
+  await recordJob($)
   collapse?.cancel()
   if (list.phase === 'done') {
     const jobId = list.jobId
@@ -613,6 +766,10 @@ export function registerCleanView(on: On): void {
     await update($, enabledAtom, () => stored !== false)
     const detail = await $.store.get(DETAIL_KEY)
     await update($, detailAtom, () => (detail === 'detailed' ? 'detailed' : 'simple'))
+    // The history keeps 30 days.
+    for (const key of expiredHistoryKeys(await $.store.keys(), await now($))) {
+      await $.store.delete(key)
+    }
     await $.tool.register({
       name: 'plan_steps',
       description:
@@ -648,7 +805,8 @@ export function registerCleanView(on: On): void {
     })
     await $.command.register({
       name: 'simple',
-      description: 'Clean View: /simple on|off (or /simple to flip it), /simple details on|off for models, tokens and usage',
+      description:
+        'Clean View: /simple on|off, details on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -658,6 +816,39 @@ export function registerCleanView(on: On): void {
 
   on('command.run', { command: 'simple' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
+    if (arg.startsWith('history')) {
+      const day = dayFromArgument(arg.slice('history'.length), await now($))
+      if (day === null) {
+        return { text: 'Try /simple history, /simple history yesterday or /simple history 2026-10-06.' }
+      }
+      const opened = await showHistory($, day, true)
+      const entries = (await read($, historyAtom))?.entries ?? []
+      const count = `${entries.length} ${entries.length === 1 ? 'task' : 'tasks'}`
+
+      return {
+        text: opened?.isPlaced
+          ? `History for ${day}: ${count}.`
+          : `History for ${day}: ${count}. Widen the window to see the panel.`,
+      }
+    }
+    if (arg === 'pause') {
+      await pauseJob($)
+      return { text: 'Paused.' }
+    }
+    if (arg === 'continue') {
+      void continueJob($)
+      return { text: 'Continuing…' }
+    }
+    if (arg === 'handoff note') {
+      const saved = (await $.store.get(HANDOFF_KEY)) as { note?: string } | undefined
+      if (!saved?.note) return { text: 'No handoff note saved yet.' }
+      await $.prompt.fill({ text: saved.note })
+      return { text: 'The last handoff note is in the prompt box.' }
+    }
+    if (arg === 'handoff') {
+      void startFreshChat($)
+      return { text: 'Starting a fresh chat from a handoff note…' }
+    }
     if (arg.startsWith('details')) {
       const choice = arg.slice('details'.length).trim()
       const isDetailed =
@@ -785,9 +976,22 @@ export function registerCleanView(on: On): void {
   })
 
   on('turn.start', async ($, e, next) => {
+    runningTurn = e.turnId
     const text = ownWords(e.text)
-    if (text && !text.startsWith('/')) {
-      const list = await read($, checklistAtom)
+    const current = await read($, checklistAtom)
+    if (text === CONTINUE_TEXT && current !== null) {
+      // The Continue button: the same job picks up again.
+      await change($, list => ({
+        ...list,
+        phase: 'working',
+        stopKind: null,
+        stuckReason: null,
+        needsYouReason: null,
+        finishedAt: null,
+        isCollapsed: false,
+      }))
+    } else if (text && !text.startsWith('/')) {
+      const list = current
       if (list === null || list.phase === 'done' || list.phase === 'stopped' || list.phase === 'background') {
         await startJob($, text, e.turnId)
       } else {
@@ -825,6 +1029,7 @@ export function registerCleanView(on: On): void {
         plannedCount: list?.hasPlan ? list.plannedCount : steps.length,
         extraTokens: list?.extraTokens ?? 0,
         extraCachedTokens: list?.extraCachedTokens ?? 0,
+        stopKind: null,
         title: list?.title ?? 'Working on it',
         startedAt: list?.startedAt ?? started,
         jobId: list?.jobId ?? call.tool_use_id,
@@ -975,9 +1180,20 @@ export function registerCleanView(on: On): void {
     }
     const finished = await now($)
     const list = await read($, checklistAtom)
+    runningTurn = undefined
+    const wasPaused = isPausing
+    isPausing = false
 
     if (list !== null) {
-      if (e.reason === 'error') {
+      if (wasPaused) {
+        await change($, current => ({
+          ...current,
+          phase: 'stopped',
+          stopKind: 'pause',
+          needsYouReason: null,
+          finishedAt: finished,
+        }))
+      } else if (e.reason === 'error') {
         // StopFailure may already have named the cause; keep its sentence.
         if (list.phase !== 'stuck') {
           await setStuck($, apiErrorSentence('unknown'))
@@ -987,7 +1203,7 @@ export function registerCleanView(on: On): void {
       } else if (list.phase === 'stuck' && list.stuckReason === DENIED) {
         // Keep the explanation of why Claude paused.
       } else if (e.reason === 'aborted') {
-        await change($, current => ({ ...current, phase: 'stopped', needsYouReason: null, finishedAt: finished }))
+        await change($, current => ({ ...current, phase: 'stopped', stopKind: 'esc', needsYouReason: null, finishedAt: finished }))
       } else if (list.hasPlan && hasUnfinishedWork(list.tasks)) {
         await change($, current => ({ ...current, phase: 'needsYou', needsYouReason: WAITING }))
       } else {
@@ -1007,6 +1223,7 @@ export function registerCleanView(on: On): void {
         // Helpers or background tasks still running keep the job open.
         await settleFinished($, finished, true)
       }
+      await recordJob($)
     }
 
     return next(e)
@@ -1025,6 +1242,139 @@ export function registerCleanView(on: On): void {
     (await read($, enabledAtom)) ? next({ ...e, props: { ...e.props, hint: '' } }) : next(e),
   )
 
+  // The day's history of this project, for a retro.
+  on('ui.render', { component: 'Pane', requestId: HISTORY_PANE }, async ($, e) => {
+    const table = $.ui.resolve(e)
+    const { Box, Text, Button } = table
+    const view = await read($, historyAtom)
+    const columns = Math.max(30, e.props.bodyColumns)
+    const today = dayKey(await now($))
+    const close = <Button key="close" label="Close" role="dismiss" onPress={() => $.ui.close({ id: HISTORY_PANE })} />
+    if (view === null) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>Type /simple history to see today's tasks.</Text>
+          {close}
+        </Box>
+      )
+    }
+
+    // Day picker: earlier, a drop-down of saved days, later, and today.
+    const dayLabel = (day: string) => (day === today ? `Today, ${day}` : day)
+    const picker = (
+      <Box key="picker" flexDirection="column" marginBottom={1}>
+        <Text key="heading" bold wrap="truncate-end">
+          {`${projectName(view.project)} · ${longDay(view.day)}`}
+        </Text>
+        <Box key="controls" flexDirection="row" gap={1}>
+        <Button key="earlier" label="◀ Earlier" onPress={() => showHistory($, shiftDay(view.day, -1), false)} />
+        {'Select' in table && table.Select ? (
+          <table.Select
+            key="day"
+            label="Day: "
+            value={view.day}
+            options={view.days.map(day => ({ value: day, label: dayLabel(day) }))}
+            onSelect={day => void showHistory($, day, false)}
+          />
+        ) : (
+          <Text bold>{dayLabel(view.day)}</Text>
+        )}
+        {view.day < today && (
+          <Button key="later" label="Later ▶" onPress={() => showHistory($, shiftDay(view.day, 1), false)} />
+        )}
+        {view.day !== today && <Button key="today" label="Today" onPress={() => showHistory($, today, false)} />}
+        </Box>
+      </Box>
+    )
+
+    const report = teamReport(view)
+    if (view.isReportShown) {
+      return (
+        <Box flexDirection="column" width={columns}>
+          {picker}
+          {report.split('\n').map((line, index) => (
+            <Text key={`report-${index}`} bold={index === 0} wrap="wrap">
+              {line || ' '}
+            </Text>
+          ))}
+          <Box key="report-actions" flexDirection="row" gap={1} marginTop={1}>
+            <Button key="copy" variant="primary" label="Copy report" onPress={() => showReport($, true, report, e.surface)} />
+            <Button key="back" label="Back to the list" onPress={() => showReport($, false, report, e.surface)} />
+            {close}
+          </Box>
+        </Box>
+      )
+    }
+
+    if (view.entries.length === 0) {
+      return (
+        <Box flexDirection="column" width={columns}>
+          {picker}
+          <Text dimColor>No tasks saved for this project on that day yet.</Text>
+          {close}
+        </Box>
+      )
+    }
+
+    const marks: Record<CleanViewHistoryEntry['outcome'], [string, string | undefined]> = {
+      done: ['✓', 'green'],
+      stopped: ['■', undefined],
+      stuck: ['⚠', 'yellow'],
+      waiting: ['‖', 'yellow'],
+      background: ['◷', 'cyan'],
+      working: ['▶', 'cyan'],
+    }
+    const titleWidth = Math.max(12, Math.min(MAX_NAME, columns - 9 - 36))
+    const rows = view.entries.map(one => {
+      const [mark, color] = marks[one.outcome]
+      const took = one.finishedAt === null ? 'not finished' : formatDuration(one.finishedAt - one.startedAt)
+      const details = [`${one.stepsDone}/${one.stepsTotal}`, took, tokenNote(one.newTokens + one.cachedTokens, one.cachedTokens)]
+        .filter(Boolean)
+        .join(' · ')
+      return (
+        <Box key={`job-${one.jobId}`} flexDirection="row">
+          <Text dimColor>{`${clockTime(one.startedAt)}  `}</Text>
+          <Text color={color} dimColor={one.outcome === 'stopped'}>{`${mark} `}</Text>
+          <Text bold={one.outcome !== 'stopped'}>{fit(one.title, titleWidth)}</Text>
+          <Text dimColor wrap="truncate-end">
+            {` ${fit(details, Math.max(0, columns - 9 - titleWidth - 1)).trimEnd()}`}
+          </Text>
+        </Box>
+      )
+    })
+
+    const finished = view.entries.filter(one => one.finishedAt !== null)
+    const time = finished.reduce((sum, one) => sum + (one.finishedAt! - one.startedAt), 0)
+    const newTokens = view.entries.reduce((sum, one) => sum + one.newTokens, 0)
+    const cached = view.entries.reduce((sum, one) => sum + one.cachedTokens, 0)
+    const counts = (Object.keys(marks) as CleanViewHistoryEntry['outcome'][])
+      .map(outcome => [outcome, view.entries.filter(one => one.outcome === outcome).length] as const)
+      .filter(([, count]) => count > 0)
+      .map(([outcome, count]) => `${count} ${outcome}`)
+    const total = [
+      `${view.entries.length} ${view.entries.length === 1 ? 'task' : 'tasks'}`,
+      counts.join(', '),
+      formatDuration(time),
+      tokenNote(newTokens + cached, cached),
+    ]
+      .filter(Boolean)
+      .join(' · ')
+
+    return (
+      <Box flexDirection="column" width={columns}>
+        {picker}
+        {rows}
+        <Box key="total" marginTop={1}>
+          <Text bold wrap="truncate-end">{`Total: ${total}`}</Text>
+        </Box>
+        <Box key="actions" flexDirection="row" gap={1} marginTop={1}>
+          <Button key="report" variant="primary" label="Team report" onPress={() => showReport($, true, report, e.surface)} />
+          {close}
+        </Box>
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) {
       return next(e)
@@ -1035,11 +1385,37 @@ export function registerCleanView(on: On): void {
     const tick = list ? await read($, tickAtom) : 0
     const usage = isEnabled ? await read($, usageAtom) : NO_USAGE
     const isDetailed = isEnabled && (await read($, detailAtom)) === 'detailed'
+    const handoff = isEnabled ? await read($, handoffAtom) : 'idle'
     const columns = Math.max(20, e.props.bodyColumns)
     const current = await now($)
 
     // Plan usage, always in view; it turns yellow, then red, as a window fills.
     const warnings: RenderChildren[] = []
+    // Last row: open the history, or hand this chat off to a fresh one (a second press confirms).
+    const list0 = isEnabled ? await read($, checklistAtom) : null
+    const canPause = list0 !== null && (list0.phase === 'working' || list0.phase === 'needsYou') && list0.needsYouReason !== WAITING
+    const canContinue =
+      list0 !== null &&
+      (list0.phase === 'stopped' || list0.phase === 'stuck' || (list0.phase === 'needsYou' && list0.needsYouReason === WAITING))
+    const actions = isEnabled ? (
+      <Box key="actions" flexDirection="row" gap={2}>
+        {canPause && <Button key="pause" plain label="‖ Pause" onPress={() => pauseJob($)} />}
+        {canContinue && <Button key="continue" plain label="▶ Continue" onPress={() => continueJob($)} />}
+        <Button key="history" plain label="☰ History" onPress={() => showHistory($, dayKey(current), true)} />
+        <Button
+          key="handoff"
+          plain
+          label={
+            handoff === 'armed'
+              ? '↻ Press again to start a fresh chat'
+              : handoff === 'working'
+                ? '↻ Writing a handoff note…'
+                : '↻ Fresh chat'
+          }
+          onPress={() => pressHandoff($)}
+        />
+      </Box>
+    ) : null
     const usageParts = [
       ...usage.limits.map(one => `${one.label} ${Math.round(one.percent)}%`),
       usage.contextPercent === null ? '' : `chat ${Math.round(usage.contextPercent)}% full`,
@@ -1108,11 +1484,14 @@ export function registerCleanView(on: On): void {
         <Box flexDirection="column" width={columns}>
           {row(<Text> </Text>)}
           {warnings}
+          {actions}
         </Box>
       )
     }
 
     const elapsed = formatDuration((list.finishedAt ?? current) - list.startedAt)
+    // A paused or stopped job's clock stands still at the moment it stopped.
+    const stepClock = list.finishedAt ?? current
     const jobTokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
     const jobCached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
     const jobTokenNote = isDetailed ? tokenNote(jobTokens, jobCached) : ''
@@ -1135,7 +1514,12 @@ export function registerCleanView(on: On): void {
     } else if (list.phase === 'stopped') {
       header = (
         <Text wrap="truncate-end" dimColor>
-          {fit(`■ Stopped · ${list.title} · you pressed Esc`, headerWidth).trimEnd()}
+          {fit(
+            list.stopKind === 'pause'
+              ? `‖ Paused · ${list.title} · press Continue to pick up`
+              : `■ Stopped · ${list.title} · you pressed Esc`,
+            headerWidth,
+          ).trimEnd()}
         </Text>
       )
     } else if (list.phase === 'background') {
@@ -1154,7 +1538,7 @@ export function registerCleanView(on: On): void {
     } else {
       const left = list.hasPlan ? timeLeft(list, current) : null
       const activeStep = list.tasks.find(one => one.status === 'active')
-      const activeEstimate = isDetailed && activeStep ? stepEstimate(list, activeStep, current).percent : undefined
+      const activeEstimate = isDetailed && activeStep ? stepEstimate(list, activeStep, stepClock).percent : undefined
       const hasGrown = list.hasPlan && list.plannedCount > 0 && list.tasks.length > list.plannedCount
       // Time left replaces time spent once there is an estimate.
       const details = headerDetails(
@@ -1179,13 +1563,14 @@ export function registerCleanView(on: On): void {
         <Box flexDirection="column" width={columns}>
           {row(header)}
           {warnings}
+          {actions}
         </Box>
       )
     }
 
     // Name column: whatever the row leaves after mark, meter and label, so rows never wrap.
     const nameWidth = Math.max(4, Math.min(MAX_NAME, columns - 2 - 2 - METER - 2 - LABEL_WIDTH - 1))
-    const room = Math.max(1, e.props.maxRows - 1 - warnings.length)
+    const room = Math.max(1, e.props.maxRows - 1 - warnings.length - (actions ? 1 : 0))
     const firstUpcoming = list.tasks.findIndex(one => one.status === 'upcoming')
     // What is left of the row after mark, name, meter and label: the step's tokens, when they fit.
     const usageRoom = columns - 2 - nameWidth - (METER + 2) - LABEL_WIDTH - 1
@@ -1194,7 +1579,7 @@ export function registerCleanView(on: On): void {
       if (one.status === 'done' && one.startedAt !== null && one.finishedAt !== null) {
         timeNote = `took ${formatDuration(one.finishedAt - one.startedAt)}`
       } else if (one.status === 'active') {
-        const estimate = stepEstimate(list, one, current)
+        const estimate = stepEstimate(list, one, stepClock)
         timeNote = `${formatDuration(estimate.elapsedMs)} · ${leftLabel(estimate.leftMs)}`
       }
       const note = [timeNote, tokenNote(one.tokens, one.cachedTokens)].filter(Boolean).join(' · ')
@@ -1229,7 +1614,7 @@ export function registerCleanView(on: On): void {
         })
       } else if (one.status === 'active') {
         // The details view fills the bar gradually from the time estimate; the simple view sweeps until Claude reports.
-        const shownPercent = isDetailed ? stepEstimate(list, one, current).percent : one.percent
+        const shownPercent = isDetailed ? stepEstimate(list, one, stepClock).percent : one.percent
         const hasPercent = isDetailed || one.hasReported
         const filled = Math.round(shownPercent / 10)
         const sweepAt = tick % (METER + 3)
@@ -1317,6 +1702,7 @@ export function registerCleanView(on: On): void {
         {row(header)}
         {rows}
         {warnings}
+        {actions}
       </Box>
     )
   })

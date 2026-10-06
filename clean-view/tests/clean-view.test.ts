@@ -4,6 +4,7 @@ import type { On } from 'claude-code'
 
 import { carryTokens, cleanName, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/clean-view'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
+import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, shiftDay, teamReport } from '../hooks/history'
 
 const PLAN = 'mcp__clean-view__plan_steps'
 const PROGRESS = 'mcp__clean-view__report_progress'
@@ -645,4 +646,322 @@ test("Claude's final answer counts in the job's total, not in the last step", as
   const shown = await texts($, 'terminal', 120)
   expect(shown.join('\n')).toMatch(/All done .* · 2\.4k new · 10k cached/)
   expect(shown.some(line => line.includes('new ·') && !line.includes('All done'))).toBe(false)
+})
+
+const PANE = {
+  plugin: 'clean-view',
+  component: 'Pane',
+  requestId: 'clean-view-history',
+  props: { title: 'History', isFocused: true, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
+
+/** A project folder, and a pane that opens. */
+function historyWorld(on: On, project: { cwd: string }) {
+  on('session.cwd', () => ({ value: project.cwd }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.close', () => ({ value: undefined }) as never)
+}
+
+async function paneTexts($: Engine): Promise<string[]> {
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const found = [
+    ...(await ui.findAll({ type: 'Text' })),
+    ...(await ui.findAll({ type: 'Select' })),
+    ...(await ui.findAll({ type: 'Button' })),
+  ].map(one => one.text)
+  await ui.unmount()
+
+  return found
+}
+
+describe('history days', () => {
+  test('today, yesterday and a date are understood', () => {
+    const now = new Date(2026, 9, 6, 12).getTime()
+    expect(dayFromArgument('', now)).toBe('2026-10-06')
+    expect(dayFromArgument(' yesterday', now)).toBe('2026-10-05')
+    expect(dayFromArgument(' 2026-09-30', now)).toBe('2026-09-30')
+    expect(dayFromArgument(' last week', now)).toBe(null)
+  })
+
+  test('days older than 30 are cleaned away', () => {
+    const now = new Date(2026, 9, 6, 12).getTime()
+    expect(expiredHistoryKeys(['history:2026-08-01', 'history:2026-09-20', 'cleanViewEnabled'], now)).toEqual([
+      'history:2026-08-01',
+    ])
+  })
+})
+
+test("each finished job is saved, and /simple history shows the day's jobs for this project", async ($, on) => {
+  const clock = mock.clock(on, { now: new Date(2026, 9, 6, 9, 42).getTime() })
+  mock.store(on)
+  const project = { cwd: '/work/landing-site' }
+  historyWorld(on, project)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.Stop', () => ({}) as never)
+
+  // A finished job.
+  await $.turn.start({ text: 'Build the pricing section', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await clock.advance(12 * 60_000 + 30_000)
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  // A stopped job.
+  await clock.advance(60_000)
+  await $.turn.start({ text: 'Fix the menu', turnId: 't2' })
+  await callTool($, { tool: PLAN, steps: ['Find the menu', 'Fix it', 'Check it'] })
+  await clock.advance(2 * 60_000)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' })
+
+  // A job in another project stays out of this one's history.
+  project.cwd = '/work/other-project'
+  await $.turn.start({ text: 'Rename the files', turnId: 't3' })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer' })
+  project.cwd = '/work/landing-site'
+
+  const result = await $.command.run({ command: 'simple', args: 'history' } as never)
+  expect(result.text).toBe(`History for ${dayKey(clock.now())}: 2 tasks.`)
+
+  const shown = (await paneTexts($)).join('\n')
+  expect(shown).toContain('09:42')
+  expect(shown).toContain('Build the pricing section')
+  expect(shown).toContain('2/2 · 12m 30s')
+  expect(shown).toContain('Fix the menu')
+  expect(shown).toContain('■')
+  expect(shown).toContain('0/3 · 2m 0s')
+  expect(shown).not.toContain('Rename the files')
+  expect(shown).toContain('Total: 2 tasks · 1 done, 1 stopped · 14m 30s')
+})
+
+test('a day with nothing saved says so', async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  await $.command.run({ command: 'simple', args: 'history 2026-01-01' } as never)
+  expect((await paneTexts($)).join('\n')).toContain('No tasks saved for this project on that day yet.')
+})
+
+const ENTRY = {
+  project: '/work/landing-site',
+  newTokens: 3000,
+  cachedTokens: 225_000,
+  isQuickAnswer: false,
+} as const
+
+test('the team report is plain: done, in progress, stuck and time, without tokens or quick questions', () => {
+  const at = new Date(2026, 9, 6, 9, 0).getTime()
+  const report = teamReport({
+    day: '2026-10-06',
+    project: '/work/landing-site',
+    entries: [
+      { ...ENTRY, jobId: 'a', startedAt: at, finishedAt: at + 12 * 60_000, title: 'Build the pricing section', outcome: 'done', stepsDone: 2, stepsTotal: 2, doneSteps: ['Write the prices', 'Check the layout'], openSteps: [] },
+      { ...ENTRY, jobId: 'b', startedAt: at + 20 * 60_000, finishedAt: at + 22 * 60_000, title: 'Fix the menu', outcome: 'stopped', stepsDone: 1, stepsTotal: 3, doneSteps: ['Find the menu'], openSteps: ['Fix the links', 'Check it'] },
+      { ...ENTRY, jobId: 'c', startedAt: at + 30 * 60_000, finishedAt: at + 31 * 60_000, title: 'Update the footer', outcome: 'stuck', stepsDone: 0, stepsTotal: 2, doneSteps: [], openSteps: ['Edit it', 'Check it'] },
+      { ...ENTRY, jobId: 'd', startedAt: at + 40 * 60_000, finishedAt: at + 40 * 60_000, title: 'Answer your question', outcome: 'done', stepsDone: 1, stepsTotal: 1, doneSteps: [], openSteps: [], isQuickAnswer: true },
+    ],
+  })
+  expect(report).toContain('Daily update · landing-site ·')
+  expect(report).toContain('Done\n• Build the pricing section (12 min)\n  Write the prices · Check the layout')
+  expect(report).toContain('Still in progress\n• Fix the menu: 1 of 3 steps done; next: fix the links')
+  expect(report).toContain('Needs attention\n• Update the footer: it got stuck and needs a decision')
+  expect(report).toContain('1 of 3 tasks finished · 15 min of work')
+  expect(report).not.toContain('Answer your question')
+  expect(report).not.toContain('token')
+  expect(report).not.toContain('cached')
+})
+
+test('the band has History and Fresh chat buttons while Clean View is on', async ($, on) => {
+  world(on)
+  for (const surface of SURFACES) {
+    const shown = (await texts($, surface)).join('\n')
+    expect(shown).toContain('☰ History')
+    expect(shown).toContain('↻ Fresh chat')
+  }
+  await $.command.run({ command: 'simple', args: 'off' } as never)
+  const off = (await texts($, 'terminal')).join('\n')
+  expect(off).not.toContain('☰ History')
+})
+
+test('the History button opens the panel; the day picker moves between days', async ($, on) => {
+  const clock = mock.clock(on, { now: new Date(2026, 9, 6, 10, 0).getTime() })
+  mock.store(on, {
+    'history:2026-10-05': [
+      { ...ENTRY, jobId: 'y', startedAt: new Date(2026, 9, 5, 15, 0).getTime(), finishedAt: new Date(2026, 9, 5, 15, 5).getTime(), title: 'Write the welcome email', outcome: 'done', stepsDone: 2, stepsTotal: 2, doneSteps: ['Draft it', 'Check it'], openSteps: [] },
+    ],
+  })
+  let opened = 0
+  on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('ui.open', () => {
+    opened += 1
+    return { value: { isPlaced: true } } as never
+  })
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('ui.toast', () => undefined as never)
+
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await band.press({ key: 'history' })
+  await band.unmount()
+  expect(opened).toBe(1)
+
+  let pane = (await paneTexts($)).join('\n')
+  expect(pane).toContain(`landing-site · ${longDay(dayKey(clock.now()))}`)
+  expect(pane).toContain('No tasks saved for this project on that day yet.')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'earlier' })
+  await ui.unmount()
+  pane = (await paneTexts($)).join('\n')
+  expect(pane).toContain('Write the welcome email')
+  expect(pane).toContain(longDay('2026-10-05'))
+  expect(pane).toContain('Later ▶')
+
+  const picker = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await $.ui.select({ plugin: 'clean-view', key: 'day', value: dayKey(clock.now()) })
+  await picker.unmount()
+  expect((await paneTexts($)).join('\n')).toContain('No tasks saved')
+  expect(shiftDay('2026-10-01', -1)).toBe('2026-09-30')
+})
+
+test('Team report shows the report and copies it', async ($, on) => {
+  mock.clock(on, { now: new Date(2026, 9, 6, 18, 0).getTime() })
+  mock.store(on, {
+    'history:2026-10-06': [
+      { ...ENTRY, jobId: 'a', startedAt: new Date(2026, 9, 6, 9, 0).getTime(), finishedAt: new Date(2026, 9, 6, 9, 12).getTime(), title: 'Build the pricing section', outcome: 'done', stepsDone: 2, stepsTotal: 2, doneSteps: ['Write it', 'Check it'], openSteps: [] },
+    ],
+  })
+  let copied = ''
+  on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.toast', () => undefined as never)
+  on('ui.copy', (_, e) => {
+    copied = e.text
+    return { value: { isCopied: true } } as never
+  })
+  await $.command.run({ command: 'simple', args: 'history' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'report' })
+  await ui.unmount()
+  expect(copied).toContain('Daily update · landing-site')
+  expect(copied).toContain('• Build the pricing section (12 min)')
+  expect((await paneTexts($)).join('\n')).toContain('Daily update · landing-site')
+})
+
+test('Fresh chat asks for a second press, then clears the chat and sends a handoff note', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('ui.toast', () => undefined as never)
+  let cleared = false
+  let sent = ''
+  on('model.fork', () => ({ value: { isAnswered: true, text: 'Continuing from an earlier chat. Here is where things stand: the menu is fixed.', usage: {} } }) as never)
+  on('command.run', (_, e) => {
+    cleared = cleared || e.command === 'clear'
+    return { text: '' }
+  })
+  on('prompt.submit', (_, e) => {
+    sent = e.text
+    return { text: e.text }
+  })
+
+  const press = async () => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key: 'handoff' })
+    await ui.unmount()
+  }
+
+  // One press only arms it, and it calms down again after 8 seconds.
+  await press()
+  expect((await texts($, 'terminal')).join('\n')).toContain('Press again to start a fresh chat')
+  expect(cleared).toBe(false)
+  await clock.advance(8000)
+  expect((await texts($, 'terminal')).join('\n')).toContain('↻ Fresh chat')
+
+  // Two presses hand off.
+  await press()
+  await press()
+  expect(cleared).toBe(true)
+  expect(sent).toContain('Continuing from an earlier chat')
+  expect((await texts($, 'terminal')).join('\n')).toContain('↻ Fresh chat')
+})
+
+test('Pause stops the running turn; Continue picks the same job up without typing', async ($, on) => {
+  world(on)
+  let aborted = ''
+  let sent = ''
+  on('turn.abort', (_, e) => {
+    aborted = e.turnId
+    return { value: undefined } as never
+  })
+  on('prompt.submit', (_, e) => {
+    sent = e.text
+    return { text: e.text }
+  })
+  const press = async (key: string) => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key })
+    await ui.unmount()
+  }
+
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('‖ Pause')
+  expect(shown).not.toContain('▶ Continue')
+
+  await press('pause')
+  expect(aborted).toBe('t1')
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('‖ Paused · ')
+  expect(shown).toContain('▶ Continue')
+  expect(shown).not.toContain('‖ Pause\n')
+
+  await press('continue')
+  expect(sent).toBe('Please continue where you left off.')
+  await $.turn.start({ text: sent, turnId: 't2' })
+  shown = (await texts($, 'terminal')).join('\n')
+  // The same job and plan, working again.
+  expect(shown).toContain('Write the page')
+  expect(shown).toContain('▶ ')
+  expect(shown).not.toContain('Paused')
+  expect(shown).not.toContain('Understand your request')
+  expect(shown).toContain('‖ Pause')
+})
+
+test('after Esc the header says Stopped, and Continue is offered', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('■ Stopped')
+  expect(shown).toContain('you pressed Esc')
+  expect(shown).toContain('▶ Continue')
+})
+
+test("a paused step's time stands still", async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('turn.abort', () => ({ value: undefined }) as never)
+  await detailsOn($)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  await clock.advance(30_000)
+  await $.command.run({ command: 'simple', args: 'pause' } as never)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
+
+  const before = (await texts($, 'terminal', 120)).join('\n')
+  expect(before).toContain('30s · ')
+  await clock.advance(5 * 60_000)
+  const after = (await texts($, 'terminal', 120)).join('\n')
+  expect(after).toContain('30s · ')
+  expect(after).not.toContain('5m 30s')
 })

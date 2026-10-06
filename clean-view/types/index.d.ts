@@ -65,6 +65,8 @@ export type CleanViewChecklist = {
   extraTokens: number
   /** Of those, the tokens read from the prompt cache. */
   extraCachedTokens: number
+  /** How a stopped job was stopped: Esc, or the Pause button. */
+  stopKind: 'esc' | 'pause' | null
 }
 
 /** One plan window and how much of it is used. */
@@ -87,6 +89,42 @@ export type CleanViewUsage = {
   contextPercent: number | null
 }
 
+/** How a job ended, as the history shows it. */
+export type CleanViewOutcome = 'done' | 'stopped' | 'stuck' | 'waiting' | 'background' | 'working'
+
+/** One job in the day's history: kept in the store for 30 days, on this computer only. */
+export type CleanViewHistoryEntry = {
+  jobId: string
+  /** The folder the session ran in. */
+  project: string
+  startedAt: number
+  finishedAt: number | null
+  title: string
+  outcome: CleanViewOutcome
+  stepsDone: number
+  stepsTotal: number
+  newTokens: number
+  cachedTokens: number
+  /** Names of the steps it finished, for the team report. */
+  doneSteps: string[]
+  /** Names of the steps still open. */
+  openSteps: string[]
+  /** A quick answer with no plan: listed in the panel, left out of the team report. */
+  isQuickAnswer: boolean
+}
+
+/** What the history pane shows: one day of one project. */
+export type CleanViewHistoryView = {
+  /** YYYY-MM-DD, local time. */
+  day: string
+  project: string
+  entries: CleanViewHistoryEntry[]
+  /** Days with saved history, newest first, for the day picker. */
+  days: string[]
+  /** True while the plain-English team report shows in place of the list. */
+  isReportShown: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'clean-view': {
@@ -96,6 +134,9 @@ declare module 'claude-code' {
       checklist: CleanViewChecklist | null
       tick: number
       usage: CleanViewUsage
+      historyView: CleanViewHistoryView | null
+      /** The Fresh chat button: `armed` waits for a second press to confirm. */
+      handoffState: 'idle' | 'armed' | 'working'
     }
   }
 }
