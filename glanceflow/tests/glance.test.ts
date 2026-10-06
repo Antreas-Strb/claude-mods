@@ -2292,6 +2292,12 @@ test('Tidy it up shows at the point picked in Settings, 50% full unless changed'
   expect(await full(90)).not.toContain('Tidy it up')
 })
 
+test('/glanceflow checkpoint says plainly when there is none yet', async ($, on) => {
+  world(on)
+  const result = await $.command.run({ command: 'glanceflow', args: 'checkpoint' } as never)
+  expect(result.text).toContain('No checkpoint in this chat yet')
+})
+
 test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads it afterwards', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   mock.store(on)
@@ -2302,6 +2308,11 @@ test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads
   })
   on('session.id', () => ({ value: 'chat-1' }) as never)
   on('session.measure', (_, e) => ({ changed: e.changed }))
+  const opened: string[] = []
+  on('ui.open', (_, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } } as never
+  })
   const forked: string[] = []
   on('model.fork', (_, e) => {
     forked.push(e.prompt)
@@ -2321,7 +2332,24 @@ test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads
 
   expect(forked[0]).toContain('Write a checkpoint')
   expect(instructions).toContain('Checkpoint: the pricing page is done; next, the contact form.')
-  expect(toasts).toContain('Chat tidied up. Claude keeps the checkpoint.')
+  let band = (await texts($, 'terminal')).join('\n')
+  expect(band).toContain('Chat tidied up. Claude kept a checkpoint of the work.')
+  expect(band).toContain('Where we left off')
+
+  // Where we left off opens the checkpoint in a side panel, and the note on the band goes.
+  const card = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await card.press({ key: 'recap' })
+  await card.unmount()
+  expect(opened).toEqual(['glanceflow-recap'])
+  band = (await texts($, 'terminal')).join('\n')
+  expect(band).not.toContain('Chat tidied up')
+  const recap = await $.ui.mount({ plugin: 'glanceflow', component: 'Pane', requestId: 'glanceflow-recap', surface: 'terminal', props: { title: 'Where we left off', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } } as never)
+  const recapText = (await recap.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  await recap.unmount()
+  expect(recapText).toContain('the pricing page is done; next, the contact form.')
+  expect(recapText).not.toContain('Checkpoint:')
+  expect(recapText).toMatch(/Saved at \d\d:\d\d/)
+
   const composed = await $.prompt.compose({ model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as never)
   const checkpoint = (composed as unknown as { sections: { id: string; text: string }[] }).sections.find(one => one.id === 'glanceflow:checkpoint')
   expect(checkpoint?.text).toContain('the pricing page is done')

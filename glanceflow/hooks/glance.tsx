@@ -112,9 +112,11 @@ const noticeAtom = atom({ plugin: 'glanceflow', key: 'isNoticing' } as const, fa
 const tourAtom = atom({ plugin: 'glanceflow', key: 'tourStep' } as const, null)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
 const checkpointAtom = atom({ plugin: 'glanceflow', key: 'checkpointAt' } as const, null)
+const recapAtom = atom({ plugin: 'glanceflow', key: 'isRecapShown' } as const, false)
 const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
 const HISTORY_PANE = 'glanceflow-history'
 const PLAN_PANE = 'glanceflow-plan'
+const RECAP_PANE = 'glanceflow-recap'
 const SETTINGS_PANE = 'glanceflow-settings'
 const handoffAtom = atom({ plugin: 'glanceflow', key: 'handoffState' } as const, 'idle')
 const HANDOFF_CONFIRM_MS = 8000
@@ -998,6 +1000,12 @@ const showHistory = async ($: $, day: string, isOpening: boolean) => {
 /** Opens the whole plan in a side panel: every step, what each got done, its time and helpers. */
 const showPlan = ($: $) => $.ui.open({ id: PLAN_PANE, title: 'Plan', closeOnEscape: true })
 
+/** Where we left off: the checkpoint Claude saved before the chat was tidied up, in a side panel. */
+const showRecap = async ($: $) => {
+  await update($, recapAtom, () => false)
+  return $.ui.open({ id: RECAP_PANE, title: 'Where we left off', closeOnEscape: true })
+}
+
 /** Shows the team report for the day or the week, or your own week across projects, and copies it. */
 const showReportSpan = async ($: $, span: GlanceHistoryView['reportSpan'], surface?: RenderSurface) => {
   await update($, historyAtom, view => (view ? { ...view, reportSpan: span } : view))
@@ -1205,7 +1213,7 @@ const tidyUp = async ($: $) => {
   try {
     const done = await $.session.compact(note === null ? undefined : { instructions })
     if (done.skip !== undefined) $.ui.toast(`The chat was not tidied up: ${done.skip}`)
-    else if (note !== null) $.ui.toast('Chat tidied up. Claude keeps the checkpoint.')
+    else if (note !== null) await update($, recapAtom, () => true)
     return
   } catch (refused) {
     $.ui.log(`glanceflow: compaction refused: ${refused instanceof Error ? refused.message : String(refused)}`, { to: 'debug' })
@@ -1493,7 +1501,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, week, tour, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, week, tour, pause, continue, plan, checkpoint, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1601,6 +1609,11 @@ export function registerGlance(on: On): void {
     if (arg === 'settings') {
       await showSettings($)
       return { text: 'Settings are in the side panel.' }
+    }
+    if (arg === 'checkpoint') {
+      if ((await checkpointOf($).catch(() => null)) === null) return { text: 'No checkpoint in this chat yet. Tidy it up saves one.' }
+      await showRecap($)
+      return { text: 'Where we left off is in the side panel.' }
     }
     if (arg === 'plan') {
       await showPlan($)
@@ -1775,6 +1788,10 @@ export function registerGlance(on: On): void {
     runningTurn = e.turnId
     noteSign($)
     const text = ownWords(e.text)
+    // The person moved on: the tidy-up note has done its job.
+    if (text && (await read($, recapAtom))) {
+      await update($, recapAtom, () => false)
+    }
     const current = await read($, checklistAtom)
     if (current !== null && current.approval === 'waiting' && (text === START_TEXT || isStartWords(text))) {
       // Start, or "go ahead" typed: the plan is approved and the same job goes on.
@@ -2256,8 +2273,9 @@ export function registerGlance(on: On): void {
                   .join(' ')}
               </Text>
             )}
-            <Box>
+            <Box flexDirection="row" gap={1}>
               <Button key="tidy-now" label="Tidy up now" onPress={() => tidyUp($)} />
+              {checkpointAt !== null && <Button key="recap" label="Where we left off" onPress={() => showRecap($)} />}
             </Box>
           </Box>,
         )}
@@ -2272,6 +2290,41 @@ export function registerGlance(on: On): void {
 
   // The whole plan beside the chat, with what the band above the prompt has no room for: when the job started and
   // should end, every step's summary and time (or expected time), all helpers, and in Details the tokens and cost.
+  on('ui.render', { component: 'Pane', requestId: RECAP_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const note = await checkpointOf($).catch(() => null)
+    const at = await read($, checkpointAtom)
+    const close = <Button key="close" label="Close" role="dismiss" onPress={() => $.ui.close({ id: RECAP_PANE })} />
+    if (note === null) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor wrap="wrap">No checkpoint in this chat yet. When Claude tidies the chat up, it saves one first, and it shows here.</Text>
+          {close}
+        </Box>
+      )
+    }
+    // Claude's own words, as it keeps them; personal details masked and times in the person's own time.
+    const lines = localTimes(maskPrivate(note.replace(/^Checkpoint:\s*/, ''))).split('\n')
+
+    return (
+      <Box flexDirection="column" width={Math.max(30, e.props.bodyColumns)}>
+        <Text dimColor wrap="wrap">
+          {`Saved${at === null ? '' : ` at ${clockTime(at)}`}, before the chat was tidied up. Claude keeps reading it for the rest of this chat.`}
+        </Text>
+        <Box key="note" flexDirection="column" marginTop={1}>
+          {lines.map((line, index) => (
+            <Text key={`line-${index}`} wrap="wrap">
+              {line || ' '}
+            </Text>
+          ))}
+        </Box>
+        <Box key="actions" flexDirection="row" marginTop={1}>
+          {close}
+        </Box>
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: PLAN_PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, checklistAtom)
@@ -2728,6 +2781,22 @@ export function registerGlance(on: On): void {
             label="Tidy it up"
             onPress={() => tidyUp($)}
           />
+        </Box>,
+      )
+    }
+
+    if (isEnabled && (await read($, recapAtom))) {
+      warnings.push(
+        <Box key="recap" flexDirection="row" justifyContent="space-between" width={columns}>
+          <Box flexShrink={1}>
+            <Text wrap="truncate-end" color="green">
+              ✓ Chat tidied up. Claude kept a checkpoint of the work.
+            </Text>
+          </Box>
+          <Box flexDirection="row" gap={1}>
+            <Button key="recap" label="Where we left off" onPress={() => showRecap($)} />
+            <Button key="recap-ok" plain label="OK" onPress={() => update($, recapAtom, () => false)} />
+          </Box>
         </Box>,
       )
     }

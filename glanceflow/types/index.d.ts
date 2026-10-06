@@ -185,6 +185,8 @@ declare module 'claude-code' {
       isNoticing: boolean
       /** The welcome card in view, 0 to 2; null once it is done or skipped. */
       tourStep: number | null
+      /** After a tidy-up with a checkpoint, until the next message: the band offers Where we left off. */
+      isRecapShown: boolean
       /** Calm mode: nothing moves, and statuses read in bold. */
       isCalm: boolean
       /** Password guard: a message that looks like it holds a password or key is held back until sent twice. */

@@ -64,7 +64,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **Helpers and background work:** subagents and background tasks show under the step that started them. GlanceFlow doesn't say All done while they still run.
 - **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when GlanceFlow is off; turn it off in ⚙ Settings or with `/glanceflow guard off` if it gets in your way.
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
-- **Plan limits:** a warning shows at 80% of a plan window (red at 95%) and says when the limit resets (`resets at 18:40`); with desktop notices on, you get a notice too. A "Tidy it up" button appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten.
+- **Plan limits:** a warning shows at 80% of a plan window (red at 95%) and says when the limit resets (`resets at 18:40`); with desktop notices on, you get a notice too. A "Tidy it up" button appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten. Afterwards the checklist offers **Where we left off**, which shows you that checkpoint in a side panel (also in ⚙ Settings, or `/glanceflow checkpoint`).
 
 ## What each status means
 
@@ -137,6 +137,7 @@ Biggest tasks
 | `/glanceflow plan` | Opens the whole plan in a side panel |
 | `/glanceflow settings` | Opens the settings: view, sounds, desktop notices, calm mode, plan approval, password guard and when to tidy up |
 | `/glanceflow tidy` | Saves a checkpoint, then tidies up the chat |
+| `/glanceflow checkpoint` | Shows where we left off: the checkpoint saved before the last tidy-up |
 | `/glanceflow tidy at 60`, `/glanceflow tidy off` | When the checklist offers to tidy up |
 | `/glanceflow handoff` | Starts a fresh chat from a handoff note |
 | `/glanceflow handoff note` | Puts the last handoff note in the prompt box |
