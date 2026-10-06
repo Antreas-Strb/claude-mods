@@ -80,7 +80,7 @@ Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Contin
 
 **⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), calm mode, the password guard, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
 
-![The settings panel: view, sounds and calm mode](docs/glanceflow-settings.png)
+![The settings panel: view, sounds, calm mode, password guard and when to tidy up](docs/glanceflow-settings.png)
 
 ## History for a retro
 

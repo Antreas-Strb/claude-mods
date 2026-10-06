@@ -205,6 +205,25 @@ describe('privacy', () => {
     expect(findSecrets('Order 1234 5678 is late')).toEqual([])
   })
 
+  test('everyday words that sound like credentials are not held back', () => {
+    for (const text of [
+      'Author: Antreas Stirmpou',
+      'OAuth: enabled for the login page',
+      'tokens: 128kcached in Details',
+      'auth: required for /api routes',
+      'PIN: optional for now',
+      'set GLANCE_AUTH_MODE: simple',
+      'Δες το authentication: fallback',
+      'Ο κωδικός: γράψε τον καθαρά',
+    ]) {
+      expect(findSecrets(text)).toEqual([])
+      expect(maskPrivate(text)).toBe(text)
+    }
+    expect(findSecrets(`${['DB', 'PASSWORD'].join('_')}=letmein`)).toContain('a password or key')
+    expect(findSecrets(`${['AUTH', 'TOKEN'].join('_')}: ${['abc', '123', 'def'].join('')}`)).toContain('a password or key')
+    expect(findSecrets('pin: 4821')).toContain('a password')
+  })
+
   test('the screen hides emails, phones and keys; names drop them', () => {
     const masked = maskPrivate(`mail jane@example.com or call 555-123-4567, key ${fakeKey(22)}`)
     expect(masked).not.toContain('jane@example.com')
