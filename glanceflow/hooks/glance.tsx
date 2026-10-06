@@ -804,9 +804,10 @@ const nameJob = async ($: $, text: string, jobId: string) => {
   }
 }
 
+// A plan waiting for Start stays on Needs you while Claude finishes laying it out.
 const setWorking = ($: $) =>
   change($, list =>
-    list.phase === 'needsYou' || list.phase === 'stuck'
+    list.approval !== 'waiting' && (list.phase === 'needsYou' || list.phase === 'stuck')
       ? { ...list, phase: 'working', needsYouReason: null, stuckReason: null }
       : list,
   )
@@ -1175,6 +1176,16 @@ const setGuard = async ($: $, isOn: boolean) => {
 const setApprove = async ($: $, isOn: boolean) => {
   await update($, approveAtom, () => isOn)
   await $.store.set(APPROVE_KEY, isOn)
+}
+
+/** With Approve the plan first on, a new plan waits for Start or a change; true when it now waits. */
+const holdForApproval = async ($: $): Promise<boolean> => {
+  if (!(await read($, approveAtom)) || (await read($, checklistAtom))?.approval === 'approved') {
+    return false
+  }
+  await change($, list => ({ ...list, approval: 'waiting', phase: 'needsYou', needsYouReason: APPROVE }))
+
+  return true
 }
 
 /** The person approves the plan: the same job starts. */
@@ -1708,8 +1719,7 @@ export function registerGlance(on: On): void {
         helpers: list?.helpers ?? [],
       }))
       syncTicker($, await read($, checklistAtom))
-      if ((await read($, approveAtom)) && (await read($, checklistAtom))?.approval !== 'approved') {
-        await change($, list => ({ ...list, approval: 'waiting', phase: 'needsYou', needsYouReason: APPROVE }))
+      if (await holdForApproval($)) {
         return {
           result:
             `Planned ${steps.length} steps. The person approves plans before work starts: stop now and wait for their reply. ` +
@@ -1809,6 +1819,7 @@ export function registerGlance(on: On): void {
         plannedCount: current.hasPlan ? current.plannedCount : todos.length,
         tasks: todosToTasks(todos, current.tasks),
       }))
+      await holdForApproval($)
     } else if (tool === 'TaskCreate') {
       const created = (ran.result as { task?: { id?: string } } | undefined)?.task
       const id = `task#${created?.id ?? call.tool_use_id}`
@@ -1829,6 +1840,7 @@ export function registerGlance(on: On): void {
           tasks,
         }
       })
+      await holdForApproval($)
     } else if (tool === 'TaskUpdate') {
       const id = `task#${call.taskId}`
       const status = call.status

@@ -1870,6 +1870,23 @@ test('with Approve the plan first on, Claude waits for Start before it works', a
   expect(shown).toContain('Write the page')
 })
 
+test('with Approve the plan first on, a plan Claude makes with its own task list also waits for Start', async ($, on) => {
+  world(on)
+  await $.command.run({ command: 'glanceflow', args: 'approve on' } as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: 'TaskCreate', subject: 'Write the page' } as never)
+  await callTool($, { tool: 'TaskCreate', subject: 'Check it' } as never)
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Read the plan, then press Start')
+  expect(shown).toContain('Check it')
+  expect((await callTool($, { tool: 'Bash', command: 'ls' })).deny).toContain('not approved')
+
+  await $.turn.start({ text: 'start', turnId: 't2' })
+  expect((await callTool($, { tool: 'Bash', command: 'ls' })).deny).toBeUndefined()
+  await callTool($, { tool: 'TodoWrite', todos: [{ content: 'Write the page', status: 'in_progress' }] } as never)
+  expect((await callTool($, { tool: 'Bash', command: 'ls' })).deny).toBeUndefined()
+})
+
 const PLAN_PANE = {
   plugin: 'glanceflow',
   component: 'Pane',
