@@ -129,6 +129,23 @@ test('/glanceflow off hides the band but keeps the button', async ($, on) => {
   }
 })
 
+test('another mod drawing above the prompt still shows, under the checklist', async ($, on) => {
+  world(on)
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return h(Text, {}, 'X post waiting for your OK') as never
+  })
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+
+  for (const surface of SURFACES) {
+    const shown = await texts($, surface)
+    expect(shown.join('\n')).toContain('Build my landing page')
+    expect(shown).toContain('X post waiting for your OK')
+  }
+  await $.command.run({ command: 'glanceflow', args: 'off' } as never)
+  expect(await texts($, 'terminal')).toContain('X post waiting for your OK')
+})
+
 test('plan_steps then report_progress at 100 checks off step one and starts step two', async ($, on) => {
   world(on)
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })

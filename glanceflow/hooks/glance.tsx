@@ -2695,6 +2695,8 @@ export function registerGlance(on: On): void {
     if (e.props.hasSurvey) {
       return next(e)
     }
+    // Other mods draw in this band too (an approval card, prompt buttons): keep theirs, under ours.
+    const beneath = await next(e).catch(() => null)
     const { Box, Text, Button } = $.ui.resolve(e)
     const isEnabled = await read($, enabledAtom)
     const list = isEnabled ? await read($, checklistAtom) : null
@@ -2845,6 +2847,7 @@ export function registerGlance(on: On): void {
           </Box>
           {warnings}
           {actions}
+          {beneath}
         </Box>
       )
     }
@@ -2863,6 +2866,7 @@ export function registerGlance(on: On): void {
           )}
           {warnings}
           {actions}
+          {beneath}
         </Box>
       )
     }
@@ -3217,6 +3221,7 @@ export function registerGlance(on: On): void {
         {rows}
         {warnings}
         {actions}
+        {beneath}
       </Box>
     )
   })
