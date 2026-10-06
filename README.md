@@ -1,5 +1,7 @@
 # GlanceFlow
 
+[![GlanceFlow status badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dantreas-strb%252Fglanceflow%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/antreas-strb%2Fglanceflow)
+
 **See what Claude is doing, at a glance.** A calm checklist above the prompt: the plan, the step Claude is on, how far along it is, and a clear signal when Claude needs you.
 
 ![GlanceFlow: a calm checklist above the prompt, filling in as Claude works](docs/glance-demo.gif)
