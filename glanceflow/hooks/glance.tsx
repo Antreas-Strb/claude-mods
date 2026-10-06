@@ -47,6 +47,7 @@ const SOUND_KEY = 'glanceSound'
 const CALM_KEY = 'glanceCalm'
 const GUARD_KEY = 'glanceGuard'
 const APPROVE_KEY = 'glanceApprove'
+const NOTICE_KEY = 'glanceNotice'
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 // Below this width the mode button drops the name; below METER_MIN_COLUMNS the bars go, so step names keep their room.
@@ -90,6 +91,7 @@ const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off
 const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
 const guardAtom = atom({ plugin: 'glanceflow', key: 'isGuarded' } as const, true)
 const approveAtom = atom({ plugin: 'glanceflow', key: 'approvePlan' } as const, false)
+const noticeAtom = atom({ plugin: 'glanceflow', key: 'isNoticing' } as const, false)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
 const checkpointAtom = atom({ plugin: 'glanceflow', key: 'checkpointAt' } as const, null)
 const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
@@ -589,6 +591,29 @@ const ALERTS: Partial<Record<GlancePhase, { asset: string; words: string }>> = {
   done: { asset: 'sounds/done.wav', words: 'All done' },
 }
 
+/** A desktop notice through the computer's own notifications: macOS first, then Linux. The text goes in as arguments, never as script. */
+const showNotice = async ($: $, title: string, body: string) => {
+  const script = ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run']
+  try {
+    await $.process.run(['osascript', ...script, title, body])
+  } catch {
+    // No osascript: not a Mac. notify-send is Linux's; elsewhere the band still shows it.
+    await $.process.run(['notify-send', '--app-name=Claude Code', title, body]).catch(() => undefined)
+  }
+}
+
+/** What the notice says under its title: why Claude waits or is stuck, or the job's name. */
+const noticeBody = (list: GlanceChecklist) =>
+  (list.phase === 'needsYou' ? list.needsYouReason : list.phase === 'stuck' ? list.stuckReason : null) ?? list.title
+
+/** A desktop notice when Claude needs you, gets stuck or finishes a long job, as for the sounds. */
+const noticeFor = async ($: $, list: GlanceChecklist) => {
+  const alert = ALERTS[list.phase]
+  if (!alert || !(await read($, noticeAtom)) || !(await read($, enabledAtom))) return
+  if (list.phase === 'done' && (isBusy(list) || (list.finishedAt ?? (await now($))) - list.startedAt < LONG_JOB_MS)) return
+  await showNotice($, alert.words, noticeBody(list))
+}
+
 /** A short sound (and, in voice mode, a few words) when Claude needs you, gets stuck or finishes a long job. */
 const alertFor = async ($: $, list: GlanceChecklist) => {
   const alert = ALERTS[list.phase]
@@ -613,7 +638,10 @@ const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | nul
     return changed ? { ...changed, tasks: stampTimes(changed.tasks, at) } : changed
   })
   syncTicker($, next)
-  if (next !== null && next.phase !== before.phase) void alertFor($, next)
+  if (next !== null && next.phase !== before.phase) {
+    void alertFor($, next)
+    void noticeFor($, next)
+  }
 
   return next
 }
@@ -1029,6 +1057,13 @@ const setCalm = async ($: $, isOn: boolean) => {
   syncTicker($, await read($, checklistAtom))
 }
 
+/** Desktop notices: on shows one when Claude needs you, gets stuck or finishes a long job. A sample shows at once. */
+const setNotice = async ($: $, isOn: boolean) => {
+  await update($, noticeAtom, () => isOn)
+  await $.store.set(NOTICE_KEY, isOn)
+  if (isOn) void showNotice($, 'Claude needs you', 'This is how GlanceFlow will tell you.')
+}
+
 /** The password guard: on holds back a message that looks like it has a password or key in it. */
 const setGuard = async ($: $, isOn: boolean) => {
   await update($, guardAtom, () => isOn)
@@ -1067,10 +1102,11 @@ const alertSample = async ($: $, mode: 'off' | 'chime' | 'voice') => {
   if (mode === 'voice') await $.audio.speak('Claude needs you').catch(() => undefined)
 }
 
-/** Back to how GlanceFlow starts: Simple, no sounds, calm off, password guard on, no plan approval, tidy up at 50%. */
+/** Back to how GlanceFlow starts: Simple, no sounds or notices, calm off, password guard on, no plan approval, tidy up at 50%. */
 const resetSettings = async ($: $) => {
   await setView($, 'simple')
   await setSound($, 'off')
+  await setNotice($, false)
   await setCalm($, false)
   await setGuard($, true)
   await setApprove($, false)
@@ -1114,7 +1150,7 @@ const adoptGlanceStore = async ($: $) => {
   try {
     const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
     const dir = `${config}/plugins/store`
-    const settings = new Set([STORE_KEY, DETAIL_KEY, SOUND_KEY, CALM_KEY, GUARD_KEY, APPROVE_KEY])
+    const settings = new Set([STORE_KEY, DETAIL_KEY, SOUND_KEY, CALM_KEY, GUARD_KEY, APPROVE_KEY, NOTICE_KEY])
     const mine = new Set(await $.store.keys())
     for (const file of await $.fs.list(dir)) {
       if (!/^glance_.*\.json$/.test(file.name)) {
@@ -1155,6 +1191,8 @@ export function registerGlance(on: On): void {
     await update($, guardAtom, () => isGuarded)
     const approves = (await $.store.get(APPROVE_KEY)) === true
     await update($, approveAtom, () => approves)
+    const isNoticing = (await $.store.get(NOTICE_KEY)) === true
+    await update($, noticeAtom, () => isNoticing)
     const tidyAt = await $.store.get(TIDY_KEY)
     await update($, tidyAtAtom, () => (typeof tidyAt === 'number' ? tidyAt : TIDY_AT_DEFAULT))
     const saved = (await $.store.get(CHECKPOINT_KEY)) as { sessionId?: string; at?: number } | undefined
@@ -1206,7 +1244,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, guard on|off, approve on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1243,6 +1281,16 @@ export function registerGlance(on: On): void {
         text: isOn
           ? 'The password guard is on: a message that looks like it has a password or key in it is held back.'
           : 'The password guard is off: every message is sent as you write it.',
+      }
+    }
+    if (arg.startsWith('notify')) {
+      const choice = arg.slice('notify'.length).trim()
+      const isOn = choice === 'on' ? true : choice === 'off' ? false : !(await read($, noticeAtom))
+      await setNotice($, isOn)
+      return {
+        text: isOn
+          ? 'Desktop notices are on: your computer tells you when Claude needs you, gets stuck or finishes a long job.'
+          : 'Desktop notices are off.',
       }
     }
     if (arg.startsWith('approve')) {
@@ -1785,6 +1833,7 @@ export function registerGlance(on: On): void {
     const view = !isEnabled ? 'off' : await read($, detailAtom)
     const sound = await read($, soundAtom)
     const isCalm = await read($, calmAtom)
+    const isNoticing = await read($, noticeAtom)
     const isGuarded = await read($, guardAtom)
     const approves = await read($, approveAtom)
     const tidyAt = await read($, tidyAtAtom)
@@ -1860,6 +1909,15 @@ export function registerGlance(on: On): void {
               <Button key="sound-test" label="▶ Play it" onPress={() => alertSample($, sound)} />
             </Box>
           ),
+        )}
+        {group(
+          'notice',
+          'Desktop notices',
+          isNoticing ? 'On' : 'Off',
+          choice('notice', [['off', 'Off'], ['on', 'On']], isNoticing ? 'on' : 'off', value => setNotice($, value === 'on')),
+          isNoticing
+            ? 'A notice on your computer when Claude needs you, gets stuck, or finishes a job that took over a minute.'
+            : 'Turn on to get a notice on your computer, even while you work in another app. Mac and Linux.',
         )}
         {group(
           'calm',

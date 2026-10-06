@@ -1209,6 +1209,52 @@ test('voice mode also says it in a few words', async ($, on) => {
   expect(heard).toEqual(['sounds/needs-you.wav', 'say: Claude needs you'])
 })
 
+test('desktop notices are off until turned on; then the computer says why Claude needs you', async ($, on) => {
+  const { clock, heard } = soundWorld(on)
+  const shown: string[][] = []
+  on('process.run', (_, e) => {
+    const argv = (e as { argv: readonly string[] }).argv
+    // Not a Mac here: osascript cannot start, so Linux's notify-send shows it.
+    if (argv[0] === 'osascript') throw new Error('osascript: not found')
+    shown.push([...argv.slice(-2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+  })
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it', 'Ship it'] })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  await clock.advance(1)
+  expect(shown).toEqual([])
+
+  const result = await $.command.run({ command: 'glanceflow', args: 'notify on' } as never)
+  expect(result.text).toContain('Desktop notices are on')
+  await clock.advance(1)
+  expect(shown).toEqual([['Claude needs you', 'This is how GlanceFlow will tell you.']])
+  shown.length = 0
+
+  await callTool($, { tool: 'Bash', command: 'ls' })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  await clock.advance(1)
+  expect(shown).toHaveLength(1)
+  expect(shown[0][0]).toBe('Claude needs you')
+  expect(shown[0][1]).not.toBe('')
+  // Sounds stay off: a notice alone.
+  expect(heard).toEqual([])
+
+  await clock.advance(2 * 60_000)
+  await callTool($, { tool: PROGRESS, task: 'Ship it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await clock.advance(1)
+  expect(shown.at(-1)?.[0]).toBe('All done')
+
+  await $.command.run({ command: 'glanceflow', args: 'notify off' } as never)
+  shown.length = 0
+  await $.turn.start({ text: 'Fix the footer', turnId: 't2' })
+  await callTool($, { tool: PLAN, steps: ['Fix it', 'Check it'] })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  await clock.advance(1)
+  expect(shown).toEqual([])
+})
+
 test('a finished job with helpers still running chimes only when they finish', async ($, on) => {
   const { clock, heard } = soundWorld(on)
   await $.command.run({ command: 'glanceflow', args: 'sound on' } as never)

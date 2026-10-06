@@ -169,6 +169,8 @@ declare module 'claude-code' {
       handoffState: 'idle' | 'armed' | 'working'
       /** Alerts: `chime` plays a short sound when Claude needs you, gets stuck or finishes a long job; `voice` also says it. */
       soundMode: 'off' | 'chime' | 'voice'
+      /** Desktop notices: the computer's own notification when Claude needs you, gets stuck or finishes a long job. */
+      isNoticing: boolean
       /** Calm mode: nothing moves, and statuses read in bold. */
       isCalm: boolean
       /** Password guard: a message that looks like it holds a password or key is held back until sent twice. */

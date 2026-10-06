@@ -56,6 +56,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **What Claude is doing right now:** a quiet line under the current step says it in one whole sentence: Claude's own description when it fits, like `Now: Check the page on a phone screen`, otherwise a short phrase like `Reading files (3)` or `Running the tests`. No file names or commands.
 - **What each step got done:** when a step is checked off, Claude adds one plain-English line on what it did ("Added a pricing table with three plans"). It shows under the step until Claude moves on, and goes into the History and the Team report.
 - **Sounds, if you want them:** `/glanceflow sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glanceflow sound voice` also says it ("Claude needs you"). Off by default (turn it on in ⚙ Settings); macOS only for now.
+- **Desktop notices, if you want them:** `/glanceflow notify on` shows a notice from your computer when Claude needs you, gets stuck, or finishes a job that took over a minute, with the reason in it. You see it even while you work in another app. Off by default (turn it on in ⚙ Settings); macOS and Linux.
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
 - **Status at a glance:** every status says what is happening and, when Claude needs you, where to answer. Claude waiting for its own helpers is never **Needs you**.
 - **Helpers and background work:** subagents and background tasks show under the step that started them. GlanceFlow doesn't say All done while they still run.
@@ -79,9 +80,9 @@ Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Contin
 
 ## Settings
 
-**⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), calm mode, whether to approve the plan first, the password guard, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
+**⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), desktop notices, calm mode, whether to approve the plan first, the password guard, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
 
-![The settings panel: view, sounds, calm mode, password guard and when to tidy up](docs/glanceflow-settings.png)
+![The settings panel: view, sounds, desktop notices, calm mode, plan approval, password guard and when to tidy up](docs/glanceflow-settings.png)
 
 ## History for a retro
 
@@ -113,12 +114,13 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glanceflow history yesterday`, `/glanceflow history 2026-10-06` | Shows another day |
 | `/glanceflow pause`, `/glanceflow continue` | Pauses Claude, or picks the job up again |
 | `/glanceflow plan` | Opens the whole plan in a side panel |
-| `/glanceflow settings` | Opens the settings: view, sounds, calm mode, plan approval, password guard and when to tidy up |
+| `/glanceflow settings` | Opens the settings: view, sounds, desktop notices, calm mode, plan approval, password guard and when to tidy up |
 | `/glanceflow tidy` | Saves a checkpoint, then tidies up the chat |
 | `/glanceflow tidy at 60`, `/glanceflow tidy off` | When the checklist offers to tidy up |
 | `/glanceflow handoff` | Starts a fresh chat from a handoff note |
 | `/glanceflow handoff note` | Puts the last handoff note in the prompt box |
 | `/glanceflow sound on`, `/glanceflow sound voice`, `/glanceflow sound off` | A chime (and words) when Claude needs you, gets stuck or finishes a long job |
+| `/glanceflow notify on`, `/glanceflow notify off` | A notice from your computer when Claude needs you, gets stuck or finishes a long job |
 | `/glanceflow calm on`, `/glanceflow calm off` | Nothing moves; statuses in bold |
 | `/glanceflow guard on`, `/glanceflow guard off` | Turns the password guard on or off |
 | `/glanceflow approve on`, `/glanceflow approve off` | Claude waits for ▶ Start before it works, or starts right away |
