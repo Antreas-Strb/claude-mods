@@ -1,6 +1,4 @@
-# Claude Code mods
-
-## Glance
+# Glance
 
 **See what Claude is doing, at a glance.** A calm checklist above the prompt: the plan, the step Claude is on, how far along it is, and a clear signal when Claude needs you.
 
@@ -8,7 +6,7 @@
 
 <sub>A scripted job: the checklist frames are drawn by Glance itself; the window around them is illustrative.</sub>
 
-### Install
+## Install
 
 You need:
 
@@ -18,7 +16,7 @@ You need:
 Then run:
 
 ```bash
-claude plugin marketplace add Antreas-Strb/claude-mods
+claude plugin marketplace add Antreas-Strb/glance
 ```
 
 ```bash
@@ -33,7 +31,7 @@ Then open a new chat.
 
 **Remove:** `claude plugin uninstall glance@claude-mods`.
 
-### For everyone, and for engineers
+## For everyone, and for engineers
 
 The button above the prompt cycles **Simple → Details → Off**. The view and on/off are remembered after a restart.
 
@@ -49,7 +47,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 
 <sub>Details on a scripted job, with time sped up. The tool rows in the chat above the checklist are not shown here.</sub>
 
-### What you get
+## What you get
 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and, after two steps, about how long is left. A long plan says how many steps are out of view.
@@ -59,15 +57,15 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
 - **Plan limits:** a warning shows at 80% of a plan window (red at 95%), and a "Tidy it up" button appears when the chat gets long.
 
-### What each status means
+## What each status means
 
 ![Each status Glance shows, with what it means and what to do](docs/glance-states.png)
 
-### Pause and Continue
+## Pause and Continue
 
 Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Continue** picks the same job up again, with nothing to type. Continue also shows after Esc, when Claude got stuck, or when it is waiting with steps left. The header says **‖ Paused** after Pause and **■ Stopped** after Esc. `/glance pause` and `/glance continue` do the same.
 
-### History for a retro
+## History for a retro
 
 **☰ History** under the checklist (or `/glance history`) opens a side panel with today's jobs in this project: when each started, how it ended (✓ done, ■ stopped, ⚠ stuck), steps done, how long it took and its tokens, with the day's totals at the bottom.
 
@@ -81,11 +79,11 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 
 <sub>The History panel and the Team report above are drawn by Glance from a sample day.</sub>
 
-### Fresh chat (handoff)
+## Fresh chat (handoff)
 
 **↻ Fresh chat** under the checklist (or `/glance handoff`), shown once the chat has some work in it, moves the work to a fresh chat: when a chat is too long, close to its limits, or whenever you want a clean start. Press it twice (the first press asks to confirm). Claude writes a short handoff note (goal, what is done, what is left, decisions, the next step), the chat is cleared, and the note is sent as the fresh chat's first message. The note is also saved: `/glance handoff note` puts the last one back in the prompt box.
 
-### Commands
+## Commands
 
 | Command | What it does |
 |---|---|
@@ -101,14 +99,14 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 
 The button above the prompt cycles Simple, Details and Off.
 
-### Limits
+## Limits
 
 - The Desktop app draws its own one-line tool summary ("Used 3 tools"); a mod can't hide it.
 - Pattern matching can't catch every secret written in plain words.
 - Background tasks are checked at the end of each of Claude's replies.
 - Each new job gets a short name from Haiku in the background: one small model request per job.
 
-### Credits
+## Credits
 
 The secret and personal-detail patterns in `glance/hooks/privacy.ts` are adapted from [Nate Herk's Recording Mode](https://github.com/nateherkai/claude-code-mods) (MIT licence). The overall progress and time-left idea comes from his Goal Meter.
 

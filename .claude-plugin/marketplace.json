@@ -1,6 +1,6 @@
 {
   "name": "claude-mods",
-  "description": "Claude Code mods by Antreas-Strb: Glance, a calm checklist view for people who are not technical",
+  "description": "Glance for Claude Code: a calm checklist above the prompt with the plan, progress and when Claude needs you",
   "owner": {
     "name": "Antreas-Strb"
   },
@@ -8,7 +8,7 @@
     {
       "name": "glance",
       "source": "./glance",
-      "description": "Hides tool rows and shows one plain-English checklist above the prompt: the plan, what is happening now, progress, helpers and background work, plus a password guard and plan usage (/glance)"
+      "description": "A calm checklist above the prompt: the plan, the current step, progress, helpers and when Claude needs you. Simple view for everyone, Details (with code in view) for engineers. History, team report, pause and handoff (/glance)"
     }
   ]
 }
