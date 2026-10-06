@@ -102,6 +102,8 @@ export type GlanceUsage = {
   limitPercent: number | null
   /** Which window that is, in plain words ("5-hour", "weekly"). */
   limitLabel: string | null
+  /** When that window resets, as an ISO 8601 timestamp; null when not reported. */
+  limitResetsAt: string | null
   /** How full this chat's context window is, 0 to 100. */
   contextPercent: number | null
   /** What the session has cost so far in US dollars; null where the host keeps no ledger. */

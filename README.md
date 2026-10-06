@@ -59,10 +59,11 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **Desktop notices, if you want them:** `/glanceflow notify on` shows a notice from your computer when Claude needs you, gets stuck, or finishes a job that took over a minute, with the reason in it. You see it even while you work in another app. Off by default (turn it on in ⚙ Settings). Works on macOS, Windows and Linux.
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
 - **Status at a glance:** every status says what is happening and, when Claude needs you, where to answer. Claude waiting for its own helpers is never **Needs you**.
+- **May be stuck:** if Claude shows nothing new for 3 minutes while it works (no reply, no step starting or ending), the header says so and tells you that Esc stops it. With sounds or desktop notices on, you hear or see it too. It clears by itself as soon as Claude moves again.
 - **Helpers and background work:** subagents and background tasks show under the step that started them. GlanceFlow doesn't say All done while they still run.
 - **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when GlanceFlow is off; turn it off in ⚙ Settings or with `/glanceflow guard off` if it gets in your way.
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
-- **Plan limits:** a warning shows at 80% of a plan window (red at 95%), and a "Tidy it up" button appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten.
+- **Plan limits:** a warning shows at 80% of a plan window (red at 95%) and says when the limit resets (`resets at 18:40`); with desktop notices on, you get a notice too. A "Tidy it up" button appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten.
 
 ## What each status means
 

@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
@@ -1316,6 +1316,68 @@ test('on Linux and Windows the chime and the words play through the computer\'s 
   expect(heard).toEqual([])
   expect(ran[0]).toContain("sounds\\needs-you.wav').PlaySync()")
   expect(ran[1]).toContain(".Speak('Claude needs you')")
+})
+
+test('no news from Claude for 3 minutes says it may be stuck, with a notice; news clears it', async ($, on) => {
+  const { clock } = soundWorld(on)
+  const shown: string[][] = []
+  on('process.run', (_, e) => {
+    const argv = (e as { argv: readonly string[] }).argv
+    if (argv[0] === 'osascript') throw new Error('osascript: not found')
+    shown.push([...argv.slice(-2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+  })
+  await $.command.run({ command: 'glanceflow', args: 'notify on' } as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await clock.advance(2 * 60_000)
+  expect((await texts($, 'terminal')).join('\n')).not.toContain('no news')
+
+  shown.length = 0
+  await clock.advance(70_000)
+  const quiet = (await texts($, 'terminal')).join('\n')
+  expect(quiet).toContain('no news for 3 minutes')
+  expect(quiet).toContain('Esc')
+  expect(shown.at(-1)?.[0]).toBe('Claude is stuck')
+
+  await callTool($, { tool: 'Bash', command: 'ls' })
+  expect((await texts($, 'terminal')).join('\n')).not.toContain('no news')
+
+  // Between turns, nothing is running, so nothing is stuck.
+  await $.turn.complete({ answer: 'Which colour?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await clock.advance(5 * 60_000)
+  expect((await texts($, 'terminal')).join('\n')).not.toContain('no news')
+})
+
+test('near a plan limit the warning says when it resets, and a notice says so too', async ($, on) => {
+  const { clock } = soundWorld(on)
+  const shown: string[][] = []
+  on('process.run', (_, e) => {
+    const argv = (e as { argv: readonly string[] }).argv
+    if (argv[0] === 'osascript') throw new Error('osascript: not found')
+    shown.push([...argv.slice(-2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+  })
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  await $.command.run({ command: 'glanceflow', args: 'notify on' } as never)
+  await clock.advance(1)
+  shown.length = 0
+  const resetsAt = new Date(1_000_000 + 2 * 3_600_000)
+  const at = `${String(resetsAt.getHours()).padStart(2, '0')}:${String(resetsAt.getMinutes()).padStart(2, '0')}`
+  await $.session.measure({
+    context: { window: 200_000, tokens: 20_000, percent: 10 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 82, resetsAt: resetsAt.toISOString() }],
+    changed: ['context', 'rateLimits'],
+  })
+  await clock.advance(1)
+
+  expect((await texts($, 'terminal')).join('\n')).toContain(`You've used 82% of your 5-hour limit · resets at ${at}`)
+  expect(shown).toEqual([['Plan limit', `You've used 82% of your 5-hour limit. It resets at ${at}.`]])
+
+  const later = new Date(2026, 9, 6, 12, 0).getTime()
+  expect(resetTime(new Date(2026, 9, 6, 18, 40).toISOString(), later)).toBe('at 18:40')
+  expect(resetTime(new Date(2026, 9, 8, 9, 0).toISOString(), later)).toBe('on Thu at 09:00')
+  expect(resetTime(null, later)).toBe(null)
 })
 
 test('on Windows the desktop notice is a Windows toast, with the words passed as variables, not as script', async ($, on) => {

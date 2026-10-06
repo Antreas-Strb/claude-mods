@@ -84,6 +84,9 @@ const LIMIT_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: 'w
 
 const DENIED = 'you said no to a step, so Claude paused'
 const FAILING = 'a step keeps failing, Claude is trying another way'
+const STALLED = 'no news for 3 minutes. Press Esc to stop Claude, or give it a little longer'
+// No sign of life from Claude (a piece of its reply, a tool starting or ending) for this long while it works.
+const STALL_MS = 3 * 60_000
 const PERMISSION = "Answer Claude's request in the chat"
 const QUESTION = "Answer Claude's question in the chat"
 const WAITING = 'Reply to Claude in the box below'
@@ -93,7 +96,7 @@ const enabledAtom = atom({ plugin: 'glanceflow', key: 'glanceEnabled' } as const
 const detailAtom = atom({ plugin: 'glanceflow', key: 'detailLevel' } as const, 'simple')
 const checklistAtom = atom({ plugin: 'glanceflow', key: 'checklist' } as const, null)
 const tickAtom = atom({ plugin: 'glanceflow', key: 'tick' } as const, 0)
-const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null, contextPercent: null, costUsd: null }
+const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null, limitResetsAt: null, contextPercent: null, costUsd: null }
 const usageAtom = atom({ plugin: 'glanceflow', key: 'usage' } as const, NO_USAGE)
 const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off')
 const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
@@ -146,6 +149,15 @@ export function localTimes(text: string, today = new Date()): string {
     const at = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), Number(hours), Number(minutes), Number(seconds ?? 0)))
     return `${pad2(at.getHours())}:${pad2(at.getMinutes())}${seconds === undefined ? '' : `:${pad2(at.getSeconds())}`}`
   })
+}
+
+/** When a plan window resets, in the person's own time: "at 18:40", or "on Thu at 09:00" when it is more than a day away. */
+export function resetTime(resetsAt: string | null, at: number): string | null {
+  const when = resetsAt ? new Date(resetsAt) : null
+  if (when === null || Number.isNaN(when.getTime())) return null
+  const time = `${pad2(when.getHours())}:${pad2(when.getMinutes())}`
+  if (when.getTime() - at <= 24 * 3_600_000) return `at ${time}`
+  return `on ${when.toLocaleDateString('en-GB', { weekday: 'short' })} at ${time}`
 }
 
 /** Turns any step or job name, or a step's summary, into short plain English. */
@@ -590,6 +602,10 @@ let isCalmMode = false
 /** The computer this runs on, asked when the session starts; null until known, and Claude Code plays the sounds itself. */
 let platform: 'mac' | 'windows' | 'linux' | null = null
 let tickerEvery = 0
+// Signs of life: set as Claude's reply streams or a tool starts or ends, stamped by the ticker, which runs while Claude works.
+let hasSign = false
+let lastSignAt = 0
+let isStalled = false
 
 const now = ($: $) => $.clock.now()
 
@@ -603,8 +619,34 @@ const syncTicker = ($: $, list: GlanceChecklist | null) => {
   }
   if (isAnimated && ticker === undefined) {
     tickerEvery = every
-    ticker = $.clock.every(every, () => void update($, tickAtom, tick => (tick ?? 0) + 1))
+    ticker = $.clock.every(every, () => {
+      void update($, tickAtom, tick => (tick ?? 0) + 1)
+      void checkStall($)
+    })
   }
+}
+
+/** Claude showed a sign of life; a job that looked stalled is working again. */
+const noteSign = ($: $) => {
+  hasSign = true
+  if (isStalled) {
+    isStalled = false
+    void setWorking($)
+  }
+}
+
+/** On each tick: a running turn with no sign of life for 3 minutes may be stuck. */
+const checkStall = async ($: $) => {
+  const at = await now($)
+  if (hasSign || runningTurn === undefined) {
+    hasSign = false
+    lastSignAt = at
+    return
+  }
+  if (isStalled || at - lastSignAt < STALL_MS || !(await read($, enabledAtom))) return
+  if ((await read($, checklistAtom))?.phase !== 'working') return
+  isStalled = true
+  await setStuck($, STALLED)
 }
 
 const ALERTS: Partial<Record<GlancePhase, { asset: string; words: string }>> = {
@@ -1126,7 +1168,12 @@ const measureUsage = async ($: $, usage: GlanceUsage) => {
   await update($, usageAtom, () => usage)
   const level = usage.limitPercent === null ? 0 : usage.limitPercent >= LIMIT_ALERT ? 2 : usage.limitPercent >= LIMIT_WARN ? 1 : 0
   if (level > limitLevel && usage.limitPercent !== null) {
-    $.ui.toast(`You've used ${Math.round(usage.limitPercent)}% of your ${usage.limitLabel ?? ''} limit`.replace('  ', ' '))
+    const reset = resetTime(usage.limitResetsAt, await now($))
+    const words = `You've used ${Math.round(usage.limitPercent)}% of your ${usage.limitLabel ?? ''} limit`.replace('  ', ' ')
+    $.ui.toast(reset === null ? words : `${words}. It resets ${reset}.`)
+    if ((await read($, noticeAtom)) && (await read($, enabledAtom))) {
+      await showNotice($, 'Plan limit', reset === null ? words : `${words}. It resets ${reset}.`)
+    }
   }
   limitLevel = level
 }
@@ -1553,6 +1600,7 @@ export function registerGlance(on: On): void {
       limits: e.rateLimits.map(one => ({ label: LIMIT_LABEL[one.kind] ?? one.kind, percent: one.percentUsed })),
       limitPercent: top ? top.percentUsed : null,
       limitLabel: top ? (LIMIT_LABEL[top.kind] ?? top.kind) : null,
+      limitResetsAt: top?.resetsAt ?? null,
       contextPercent: e.context.percent ?? null,
       costUsd: e.cost?.usd ?? null,
     })
@@ -1616,7 +1664,12 @@ export function registerGlance(on: On): void {
     if (e.agentId !== undefined) {
       await noteHelperStep($, e.agentId, e.model, e.effort)
     }
-    const result = yield* next(e)
+    const stream = next(e)
+    for await (const chunk of stream) {
+      noteSign($)
+      yield chunk
+    }
+    const result = await stream.result
     if (result.usage) {
       await addTokens($, e.agentId, result.usage)
     }
@@ -1641,6 +1694,7 @@ export function registerGlance(on: On): void {
 
   on('turn.start', async ($, e, next) => {
     runningTurn = e.turnId
+    noteSign($)
     const text = ownWords(e.text)
     const current = await read($, checklistAtom)
     if (current !== null && current.approval === 'waiting' && (text === START_TEXT || isStartWords(text))) {
@@ -1684,6 +1738,7 @@ export function registerGlance(on: On): void {
     }
     const tool = String(call.tool)
     const isMain = e.agentId === undefined
+    noteSign($)
 
     if (tool === PLAN_TOOL) {
       const input = e as unknown as { steps?: unknown; sizes?: unknown }
@@ -1786,6 +1841,7 @@ export function registerGlance(on: On): void {
     }
 
     const ran = await next(e)
+    noteSign($)
 
     if (ran.deny !== undefined) {
       return ran
@@ -1893,6 +1949,10 @@ export function registerGlance(on: On): void {
       return next(e)
     }
     const finished = await now($)
+    if (isStalled) {
+      isStalled = false
+      await setWorking($)
+    }
     const list = await read($, checklistAtom)
     runningTurn = undefined
     const wasPaused = isPausing
@@ -2535,6 +2595,7 @@ export function registerGlance(on: On): void {
     ].filter(Boolean)
     const top = usage.limitPercent ?? 0
     const isHigh = top >= LIMIT_WARN
+    const reset = isHigh ? resetTime(usage.limitResetsAt, await now($)) : null
     // The simple view speaks up only near a limit; the detailed view always shows usage.
     if (usageParts.length > 0 && (isDetailed || isHigh)) {
       warnings.push(
@@ -2545,7 +2606,7 @@ export function registerGlance(on: On): void {
             dimColor={!isHigh}
           >
             {isHigh
-              ? `⚠ You've used ${Math.round(top)}% of your ${usage.limitLabel ?? 'plan'} limit · ${usageParts.join(' · ')}`
+              ? `⚠ You've used ${Math.round(top)}% of your ${usage.limitLabel ?? 'plan'} limit${reset === null ? '' : ` · resets ${reset}`} · ${usageParts.join(' · ')}`
               : `Plan usage: ${usageParts.join(' · ')}`}
           </Text>
         </Box>,
