@@ -1267,3 +1267,44 @@ test('/glance-checklist works like /glance, so it never clashes with another mod
   expect(result.text).toBe('Glance details are on.')
   expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Details')
 })
+
+/** A long chat, so the band offers Tidy it up; the test says what compaction and /compact do. */
+async function tidyWorld($: Engine, on: On, compactCommand: () => void) {
+  mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text: string }).text))
+    return undefined as never
+  })
+  on('ui.log', () => ({ value: undefined }) as never)
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  on('session.compact', () => {
+    throw new Error('not now')
+  })
+  const commands: string[] = []
+  on('command.run', (_, e) => {
+    commands.push(e.command)
+    if (e.command === 'compact') compactCommand()
+    return { text: '' }
+  })
+  await $.session.measure({ context: { window: 200_000, tokens: 160_000, percent: 80 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'compact' })
+  await ui.unmount()
+  return { toasts, commands }
+}
+
+test('Tidy it up falls back to /compact when the engine refuses to compact', async ($, on) => {
+  const { toasts, commands } = await tidyWorld($, on, () => undefined)
+  expect(commands).toContain('compact')
+  expect(toasts.join('\n')).not.toContain("Couldn't tidy up")
+})
+
+test('when /compact fails too, Tidy it up says why', async ($, on) => {
+  const { toasts } = await tidyWorld($, on, () => {
+    throw new Error('a turn is running')
+  })
+  // The engine's reason shows in brackets, so the next report says what went wrong.
+  expect(toasts.join('\n')).toMatch(/Couldn't tidy up the chat \(.+\)\. Type \/compact to try again\./)
+})

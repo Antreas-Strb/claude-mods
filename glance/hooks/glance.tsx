@@ -814,6 +814,24 @@ const finishHelper = async ($: $, agentId: string, status: 'done' | 'failed') =>
   if (list?.phase === 'background') await settleFinished($, await now($), false)
 }
 
+/** Tidies the chat up: the engine's compaction, or /compact itself when that is refused. */
+const tidyUp = async ($: $) => {
+  $.ui.toast('Tidying up the chat…')
+  try {
+    const done = await $.session.compact()
+    if (done.skip !== undefined) $.ui.toast(`The chat was not tidied up: ${done.skip}`)
+    return
+  } catch (refused) {
+    $.ui.log(`glance: compaction refused: ${refused instanceof Error ? refused.message : String(refused)}`, { to: 'debug' })
+  }
+  try {
+    await $.command.run({ command: 'compact', args: '' })
+  } catch (failed) {
+    const reason = failed instanceof Error ? failed.message : String(failed)
+    $.ui.toast(`Couldn't tidy up the chat (${reason.slice(0, 80)}). Type /compact to try again.`)
+  }
+}
+
 const holdSecretMessage = async ($: $, text: string, kinds: string[]) => {
   heldMessage = { text, at: await now($) }
   // Put it back in the box so nothing is lost.
@@ -1630,12 +1648,7 @@ export function registerGlance(on: On): void {
           <Button
             key="compact"
             label="Tidy it up"
-            onPress={() =>
-              $.session.compact().then(
-                done => void (done.skip !== undefined && $.ui.toast('Nothing to tidy up yet.')),
-                () => void $.ui.toast("Couldn't tidy up the chat. Type /compact to try again."),
-              )
-            }
+            onPress={() => tidyUp($)}
           />
         </Box>,
       )
