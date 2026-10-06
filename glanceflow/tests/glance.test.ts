@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
@@ -1728,6 +1728,20 @@ test('the Plan shows long step names whole in a narrow panel', async ($, on) => 
   expect(pane).toContain('Keep the product profile private')
   expect(pane).toContain('Load the social media guide')
   expect(pane).not.toContain('priva…')
+})
+
+test('a time Claude writes in UTC shows in the person\'s own time', () => {
+  const today = new Date(Date.UTC(2026, 9, 6, 9, 0))
+  const local = (hours: number, minutes: number, seconds?: number) => {
+    const at = new Date(Date.UTC(2026, 9, 6, hours, minutes, seconds ?? 0))
+    const two = (value: number) => String(value).padStart(2, '0')
+    return `${two(at.getHours())}:${two(at.getMinutes())}${seconds === undefined ? '' : `:${two(at.getSeconds())}`}`
+  }
+  expect(localTimes('Wait until 10:01:45 UTC to start the deploy', today)).toBe(`Wait until ${local(10, 1, 45)} to start the deploy`)
+  expect(localTimes('Check again at 9:30 GMT and 23:05Z', today)).toBe(`Check again at ${local(9, 30)} and ${local(23, 5)}`)
+  // Without UTC, GMT or Z the time could be anyone's: it stays as Claude wrote it.
+  expect(localTimes('Wait for the 10:15 cron run to finish', today)).toBe('Wait for the 10:15 cron run to finish')
+  expect(cleanName('Wait until 10:01:45 UTC to start the checks')).not.toContain('UTC')
 })
 
 test('a request in another language gets an English title', () => {

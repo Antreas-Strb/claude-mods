@@ -129,9 +129,20 @@ The person follows your work on a checklist above the prompt, in plain English.
 const CODE_FILE =
   /\.(tsx?|jsx?|mjs|cjs|mts|cts|py|rb|go|rs|java|kts?|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|bash|json|ya?ml|toml|css|scss|sass|less|html?|md|mdx|sql|vue|svelte|lock|env|xml|ini|cfg|conf|txt|csv|log)\W*$/i
 
+const pad2 = (value: number) => String(value).padStart(2, '0')
+
+/** "10:01:45 UTC" in the person's own time, "13:01:45" in Athens; a time without UTC, GMT or Z is left as written. */
+export function localTimes(text: string, today = new Date()): string {
+  return text.replace(/(?<![\d:])(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s?(?:UTC|GMT|Z)\b/g, (whole, hours, minutes, seconds) => {
+    if (Number(hours) > 23 || Number(minutes) > 59) return whole
+    const at = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), Number(hours), Number(minutes), Number(seconds ?? 0)))
+    return `${pad2(at.getHours())}:${pad2(at.getMinutes())}${seconds === undefined ? '' : `:${pad2(at.getSeconds())}`}`
+  })
+}
+
 /** Turns any step or job name, or a step's summary, into short plain English. */
 export function cleanName(raw: unknown, max = MAX_NAME): string {
-  const words = maskPrivate(String(raw ?? ''))
+  const words = localTimes(maskPrivate(String(raw ?? '')))
     .replace(/`[^`]*`/g, ' ')
     .replace(/`/g, ' ')
     .split(/\s+/)
