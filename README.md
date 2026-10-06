@@ -4,6 +4,10 @@
 
 **See what Claude is doing, at a glance.**
 
+![Glance: a calm checklist above the prompt, filling in as Claude works](docs/glance-demo.gif)
+
+<sub>A scripted job: the checklist frames are drawn by Glance itself; the window around them is illustrative.</sub>
+
 Glance makes Claude Code calm and friendly for people who aren't technical. While Claude works, tool calls, file diffs and command output are hidden, and one checklist sits above the prompt: the plan, what is happening now and how far along it is.
 
 ```
