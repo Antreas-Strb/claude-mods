@@ -39,6 +39,10 @@ The button above the prompt cycles **Simple → Details → Off**. Both the view
 - the job's total tokens
 - plan usage all the time, e.g. `Plan usage: 5-hour 42% · weekly 18% · chat 34% full`
 
+![Glance Details: bars fill with time and time left, a Haiku helper under its step, tokens per step and plan usage](docs/glance-details.gif)
+
+<sub>The same kind of scripted job in Details, with time sped up.</sub>
+
 ### Pause and Continue
 
 Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Continue** picks the same job up again, with nothing to type. Continue also shows after Esc, when Claude got stuck, or when it is waiting with steps left. The header says **‖ Paused** after Pause and **■ Stopped** after Esc. `/glance pause` and `/glance continue` do the same.
@@ -47,28 +51,15 @@ Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Contin
 
 **☰ History** under the checklist (or `/glance history`) opens a side panel with today's jobs in this project: when each started, how it ended (✓ done, ■ stopped, ⚠ stuck), steps done, how long it took and its tokens, with the day's totals at the bottom.
 
-```
-09:42  ✓ Build the pricing section     2/2 · 12m 30s · 3k new · 225k cached
-09:56  ■ Fix the menu                  0/3 · 2m 0s
-Total: 2 tasks · 1 done, 1 stopped · 14m 30s · 3k new · 225k cached
-```
+![The History panel: the day's jobs with start time, outcome, steps, time and tokens, the day picker and the totals](docs/glance-history.png)
 
 In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** move between days (or type `/glance history yesterday`, `/glance history 2026-10-06`). The history stays on this computer and keeps 30 days.
 
 **Team report** turns the day into a short update in plain words for the team, a manager or a CEO, and copies it to paste into Slack, Teams or an email: what got done, what is still in progress and what is next, what needs a decision, and the time spent. No tokens, models or file names, and quick questions are left out.
 
-```
-Daily update · landing-site · Tuesday 6 October 2026
+![The Team report: what got done, what is still in progress, what needs a decision, and the time spent](docs/glance-team-report.png)
 
-Done
-• Build the pricing section (12 min)
-  Write the prices · Check the layout
-
-Still in progress
-• Fix the menu: 1 of 3 steps done; next: fix the links
-
-1 of 2 tasks finished · 14 min of work
-```
+<sub>The History panel and the Team report above are drawn by Glance from a sample day.</sub>
 
 ### Fresh chat (handoff)
 
