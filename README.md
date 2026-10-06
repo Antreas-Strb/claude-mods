@@ -42,7 +42,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
   - tokens per step, new ones first, then the cheaper ones read back from the prompt cache, e.g. `3k new · 45k cached`; Claude's final answer counts in the job's total only
   - plan usage all the time, e.g. `Plan usage: 5-hour 42% · weekly 18% · chat 34% full`
   - what each job cost, e.g. `$0.42`, where Claude Code keeps a cost (pay-as-you-go API use); the History panel shows it per job and per day
-- **Off**: Claude Code as usual. Only the password guard stays on.
+- **Off**: Claude Code as usual. Only the password guard stays on (it has its own switch in ⚙ Settings).
 
 ![GlanceFlow Details: bars fill with time and time left, a Haiku helper under its step, tokens per step and plan usage](docs/glance-details.gif)
 
@@ -58,7 +58,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
 - **Status at a glance:** every status says what is happening and, when Claude needs you, where to answer. Claude waiting for its own helpers is never **Needs you**.
 - **Helpers and background work:** subagents and background tasks show under the step that started them. GlanceFlow doesn't say All done while they still run.
-- **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when GlanceFlow is off.
+- **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when GlanceFlow is off; turn it off in ⚙ Settings or with `/glanceflow guard off` if it gets in your way.
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
 - **Plan limits:** a warning shows at 80% of a plan window (red at 95%), and a "Tidy it up" button appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten.
 
@@ -78,7 +78,7 @@ Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Contin
 
 ## Settings
 
-**⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), calm mode, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
+**⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), calm mode, the password guard, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
 
 ![The settings panel: view, sounds and calm mode](docs/glanceflow-settings.png)
 
@@ -112,13 +112,14 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glanceflow history yesterday`, `/glanceflow history 2026-10-06` | Shows another day |
 | `/glanceflow pause`, `/glanceflow continue` | Pauses Claude, or picks the job up again |
 | `/glanceflow plan` | Opens the whole plan in a side panel |
-| `/glanceflow settings` | Opens the settings: view, sounds, calm mode and when to tidy up |
+| `/glanceflow settings` | Opens the settings: view, sounds, calm mode, password guard and when to tidy up |
 | `/glanceflow tidy` | Saves a checkpoint, then tidies up the chat |
 | `/glanceflow tidy at 60`, `/glanceflow tidy off` | When the checklist offers to tidy up |
 | `/glanceflow handoff` | Starts a fresh chat from a handoff note |
 | `/glanceflow handoff note` | Puts the last handoff note in the prompt box |
 | `/glanceflow sound on`, `/glanceflow sound voice`, `/glanceflow sound off` | A chime (and words) when Claude needs you, gets stuck or finishes a long job |
 | `/glanceflow calm on`, `/glanceflow calm off` | Nothing moves; statuses in bold |
+| `/glanceflow guard on`, `/glanceflow guard off` | Turns the password guard on or off |
 
 The button above the prompt cycles Simple, Details and Off.
 

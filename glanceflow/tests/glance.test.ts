@@ -234,6 +234,28 @@ test('a message with a password is held back once, then sent when sent again', a
   expect(entered).toBe(2)
 })
 
+test('with the password guard off, a message with a password is sent straight away', async ($, on) => {
+  world(on)
+  let entered = 0
+  on('prompt.submit', (_, e) => {
+    entered += 1
+    return { text: e.text }
+  })
+  const off = await $.command.run({ command: 'glanceflow', args: 'guard off' } as never)
+  expect(off.text).toContain('password guard is off')
+  const prompt = { text: `log in with password: ${SAMPLE_PASSWORD}`, wait: false, origin: { kind: 'composer' } } as never
+
+  const sent = await $.prompt.submit(prompt)
+  expect((sent as { drop?: string }).drop).toBeUndefined()
+  expect(entered).toBe(1)
+
+  const on_ = await $.command.run({ command: 'glanceflow', args: 'guard on' } as never)
+  expect(on_.text).toContain('password guard is on')
+  const held = await $.prompt.submit(prompt)
+  expect((held as { drop?: string }).drop).toContain('password')
+  expect(entered).toBe(1)
+})
+
 test('overall progress, time left and a grown plan show in the header and footer', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)

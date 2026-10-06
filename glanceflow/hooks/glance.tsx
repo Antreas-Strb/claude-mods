@@ -45,6 +45,7 @@ const STORE_KEY = 'glanceEnabled'
 const DETAIL_KEY = 'glanceDetail'
 const SOUND_KEY = 'glanceSound'
 const CALM_KEY = 'glanceCalm'
+const GUARD_KEY = 'glanceGuard'
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 // Below this width the mode button drops the name; below METER_MIN_COLUMNS the bars go, so step names keep their room.
@@ -85,6 +86,7 @@ const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null
 const usageAtom = atom({ plugin: 'glanceflow', key: 'usage' } as const, NO_USAGE)
 const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off')
 const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
+const guardAtom = atom({ plugin: 'glanceflow', key: 'isGuarded' } as const, true)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
 const checkpointAtom = atom({ plugin: 'glanceflow', key: 'checkpointAt' } as const, null)
 const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
@@ -990,6 +992,12 @@ const setCalm = async ($: $, isOn: boolean) => {
   syncTicker($, await read($, checklistAtom))
 }
 
+/** The password guard: on holds back a message that looks like it has a password or key in it. */
+const setGuard = async ($: $, isOn: boolean) => {
+  await update($, guardAtom, () => isOn)
+  await $.store.set(GUARD_KEY, isOn)
+}
+
 /** Picks Simple, Details or Off directly, as the settings panel does. */
 const setView = async ($: $, view: 'simple' | 'detailed' | 'off') => {
   await update($, enabledAtom, () => view !== 'off')
@@ -1007,11 +1015,12 @@ const alertSample = async ($: $, mode: 'off' | 'chime' | 'voice') => {
   if (mode === 'voice') await $.audio.speak('Claude needs you').catch(() => undefined)
 }
 
-/** Back to how GlanceFlow starts: Simple, no sounds, calm off, tidy up at 50%. */
+/** Back to how GlanceFlow starts: Simple, no sounds, calm off, password guard on, tidy up at 50%. */
 const resetSettings = async ($: $) => {
   await setView($, 'simple')
   await setSound($, 'off')
   await setCalm($, false)
+  await setGuard($, true)
   await setTidyAt($, TIDY_AT_DEFAULT)
   $.ui.toast('Settings are back to their defaults.')
 }
@@ -1052,7 +1061,7 @@ const adoptGlanceStore = async ($: $) => {
   try {
     const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
     const dir = `${config}/plugins/store`
-    const settings = new Set([STORE_KEY, DETAIL_KEY, SOUND_KEY, CALM_KEY])
+    const settings = new Set([STORE_KEY, DETAIL_KEY, SOUND_KEY, CALM_KEY, GUARD_KEY])
     const mine = new Set(await $.store.keys())
     for (const file of await $.fs.list(dir)) {
       if (!/^glance_.*\.json$/.test(file.name)) {
@@ -1089,6 +1098,8 @@ export function registerGlance(on: On): void {
     const sound = await $.store.get(SOUND_KEY)
     await update($, soundAtom, () => (sound === 'chime' || sound === 'voice' ? sound : 'off'))
     isCalmMode = (await $.store.get(CALM_KEY)) === true
+    const isGuarded = (await $.store.get(GUARD_KEY)) !== false
+    await update($, guardAtom, () => isGuarded)
     const tidyAt = await $.store.get(TIDY_KEY)
     await update($, tidyAtAtom, () => (typeof tidyAt === 'number' ? tidyAt : TIDY_AT_DEFAULT))
     const saved = (await $.store.get(CHECKPOINT_KEY)) as { sessionId?: string; at?: number } | undefined
@@ -1140,7 +1151,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, calm on|off, guard on|off, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1168,6 +1179,16 @@ export function registerGlance(on: On): void {
       const choice = arg.slice('calm'.length).trim()
       await setCalm($, choice === 'on' ? true : choice === 'off' ? false : !(await read($, calmAtom)))
       return { text: isCalmMode ? 'Calm mode is on: nothing moves, statuses are bold.' : 'Calm mode is off.' }
+    }
+    if (arg.startsWith('guard')) {
+      const choice = arg.slice('guard'.length).trim()
+      const isOn = choice === 'on' ? true : choice === 'off' ? false : !(await read($, guardAtom))
+      await setGuard($, isOn)
+      return {
+        text: isOn
+          ? 'The password guard is on: a message that looks like it has a password or key in it is held back.'
+          : 'The password guard is off: every message is sent as you write it.',
+      }
     }
     if (arg.startsWith('history')) {
       const day = dayFromArgument(arg.slice('history'.length), await now($))
@@ -1259,7 +1280,7 @@ export function registerGlance(on: On): void {
 
   // Passwords and keys pasted into a message stay on this computer unless sent twice.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind === 'plugin') {
+    if (e.origin.kind === 'plugin' || !(await read($, guardAtom))) {
       return next(e)
     }
     const kinds = findSecrets(e.text)
@@ -1673,6 +1694,7 @@ export function registerGlance(on: On): void {
     const view = !isEnabled ? 'off' : await read($, detailAtom)
     const sound = await read($, soundAtom)
     const isCalm = await read($, calmAtom)
+    const isGuarded = await read($, guardAtom)
     const tidyAt = await read($, tidyAtAtom)
     const checkpointAt = await read($, checkpointAtom)
     const usage = await read($, usageAtom)
@@ -1708,7 +1730,7 @@ export function registerGlance(on: On): void {
     const viewHelp = {
       simple: 'The steps and progress in plain words, with tool details out of the way. For everyone.',
       detailed: 'Also time, models and tokens per step, with the code in view. For engineers.',
-      off: 'Claude Code as usual: no checklist, every tool row shown. The password guard stays on.',
+      off: 'Claude Code as usual: no checklist, every tool row shown. The password guard keeps its own setting.',
     }[view]
     const soundHelp = {
       off: 'No sounds. Turn them on to look away while Claude works.',
@@ -1753,6 +1775,15 @@ export function registerGlance(on: On): void {
           isCalm ? 'On' : 'Off',
           choice('calm', [['off', 'Off'], ['on', 'On']], isCalm ? 'on' : 'off', value => setCalm($, value === 'on')),
           isCalm ? 'Nothing on screen moves, and statuses read in bold.' : 'Bars and spinners move while Claude works. Turn on for a still screen.',
+        )}
+        {group(
+          'guard',
+          'Password guard',
+          isGuarded ? 'On' : 'Off',
+          choice('guard', [['on', 'On'], ['off', 'Off']], isGuarded ? 'on' : 'off', value => setGuard($, value === 'on')),
+          isGuarded
+            ? 'A message that looks like it has a password or key in it is held back. Press Enter again to send it anyway.'
+            : 'Every message is sent as you write it. Keys and emails are still masked on screen.',
         )}
         {group(
           'tidy',

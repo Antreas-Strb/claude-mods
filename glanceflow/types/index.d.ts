@@ -162,6 +162,8 @@ declare module 'claude-code' {
       soundMode: 'off' | 'chime' | 'voice'
       /** Calm mode: nothing moves, and statuses read in bold. */
       isCalm: boolean
+      /** Password guard: a message that looks like it holds a password or key is held back until sent twice. */
+      isGuarded: boolean
       /** How full the chat gets, in percent, before the band offers to tidy it up; 0 never offers. */
       tidyAt: number
       /** When the last checkpoint was saved before tidying up; null when none was. */
