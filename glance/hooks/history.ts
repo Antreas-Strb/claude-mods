@@ -43,7 +43,8 @@ const OUTCOME: Record<GlanceChecklist['phase'], GlanceOutcome> = {
 }
 
 /** One job as the history keeps it. */
-export function entryFromChecklist(list: GlanceChecklist, project: string): GlanceHistoryEntry {
+/** One job as the history keeps it; `costUsd` is what it cost, where the host keeps a ledger. */
+export function entryFromChecklist(list: GlanceChecklist, project: string, costUsd: number | null = null): GlanceHistoryEntry {
   const tokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
   const cached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
 
@@ -61,6 +62,7 @@ export function entryFromChecklist(list: GlanceChecklist, project: string): Glan
     doneSteps: list.hasPlan ? list.tasks.filter(one => one.status === 'done').map(one => one.name) : [],
     openSteps: list.hasPlan ? list.tasks.filter(one => one.status !== 'done').map(one => one.name) : [],
     isQuickAnswer: !list.hasPlan,
+    costUsd,
   }
 }
 

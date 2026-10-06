@@ -41,6 +41,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
   - each helper's type, model and effort, e.g. `Explore · Haiku 4.5 · low effort`
   - tokens per step, new ones first, then the cheaper ones read back from the prompt cache, e.g. `3k new · 45k cached`; Claude's final answer counts in the job's total only
   - plan usage all the time, e.g. `Plan usage: 5-hour 42% · weekly 18% · chat 34% full`
+  - what each job cost, e.g. `$0.42`, where Claude Code keeps a cost (pay-as-you-go API use); the History panel shows it per job and per day
 - **Off**: Claude Code as usual. Only the password guard stays on.
 
 ![Glance Details: bars fill with time and time left, a Haiku helper under its step, tokens per step and plan usage](docs/glance-details.gif)
@@ -51,6 +52,9 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and, after two steps, about how long is left. A long plan says how many steps are out of view.
+- **What Claude is doing right now:** a quiet line under the current step says it in plain words, like `Reading files (3)…` or `Running the tests…`. No file names or commands.
+- **Sounds, if you want them:** `/glance sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glance sound voice` also says it ("Claude needs you"). Off by default; macOS only for now.
+- **Calm mode:** `/glance calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
 - **Status at a glance:** every status says what is happening and, when Claude needs you, where to answer. Claude waiting for its own helpers is never **Needs you**.
 - **Helpers and background work:** subagents and background tasks show under the step that started them. Glance doesn't say All done while they still run.
 - **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when Glance is off.
@@ -96,8 +100,12 @@ In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** mo
 | `/glance pause`, `/glance continue` | Pauses Claude, or picks the job up again |
 | `/glance handoff` | Starts a fresh chat from a handoff note |
 | `/glance handoff note` | Puts the last handoff note in the prompt box |
+| `/glance sound on`, `/glance sound voice`, `/glance sound off` | A chime (and words) when Claude needs you, gets stuck or finishes a long job |
+| `/glance calm on`, `/glance calm off` | Nothing moves; statuses in bold |
 
 The button above the prompt cycles Simple, Details and Off.
+
+Another mod is also called glance and uses `/glance`. If you have both, use **`/glance-checklist`**: it does everything `/glance` does. `/simple` still works too.
 
 ## Limits
 

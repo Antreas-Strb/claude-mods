@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { carryTokens, cleanName, fit, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, carryTokens, cleanName, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, shiftDay, teamReport } from '../hooks/history'
 
@@ -1089,4 +1089,181 @@ test('/simple still works as another name for /glance', async ($, on) => {
   expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Off')
   await $.command.run({ command: 'glance', args: 'on' } as never)
   expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Simple')
+})
+
+
+/** A world with a clock to move, and the sounds and words Glance plays. */
+function soundWorld(on: On) {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.Notification', () => ({}) as never)
+  on('classic.Stop', () => ({}) as never)
+  const heard: string[] = []
+  on('audio.play', (_, e) => {
+    heard.push(String((e.clip as { asset?: string }).asset))
+    return { value: undefined } as never
+  })
+  on('audio.speak', (_, e) => {
+    heard.push(`say: ${(e as { text: string }).text}`)
+    return { value: { via: 'system' } } as never
+  })
+  return { clock, heard }
+}
+
+test('sounds are off until turned on; then a chime when Claude needs you, gets stuck or finishes a long job', async ($, on) => {
+  const { clock, heard } = soundWorld(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it', 'Ship it'] })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  expect(heard).toEqual([])
+
+  const result = await $.command.run({ command: 'glance', args: 'sound on' } as never)
+  expect(result.text).toContain('Sounds are on')
+  heard.length = 0
+  await callTool($, { tool: 'Bash', command: 'ls' })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  expect(heard).toEqual(['sounds/needs-you.wav'])
+
+  // A quick job ends quietly; a long one chimes.
+  await clock.advance(2 * 60_000)
+  await callTool($, { tool: PROGRESS, task: 'Ship it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(heard).toEqual(['sounds/needs-you.wav', 'sounds/done.wav'])
+
+  await $.turn.start({ text: 'What time is it?', turnId: 't2' })
+  await $.turn.complete({ answer: 'Noon', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' })
+  expect(heard).toEqual(['sounds/needs-you.wav', 'sounds/done.wav'])
+})
+
+test('voice mode also says it in a few words', async ($, on) => {
+  const { clock, heard } = soundWorld(on)
+  await $.command.run({ command: 'glance', args: 'sound voice' } as never)
+  heard.length = 0
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  // The words follow the chime.
+  await clock.advance(1)
+  expect(heard).toEqual(['sounds/needs-you.wav', 'say: Claude needs you'])
+})
+
+test('a finished job with helpers still running chimes only when they finish', async ($, on) => {
+  const { clock, heard } = soundWorld(on)
+  await $.command.run({ command: 'glance', args: 'sound on' } as never)
+  heard.length = 0
+  await $.turn.start({ text: 'Merge the pull request', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Watch the checks'] })
+  await clock.advance(2 * 60_000)
+  await callTool($, { tool: PROGRESS, task: 'Watch the checks', percent: 100 })
+  await $.turn.complete({ answer: 'Merged.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.classic.Stop({
+    stop_hook_active: false,
+    background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'Watch CI' }],
+  } as never)
+  expect(heard.filter(one => one === 'sounds/done.wav').length).toBeLessThanOrEqual(1)
+  const before = heard.length
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as never)
+  expect(heard.slice(before)).toEqual(['sounds/done.wav'])
+})
+
+test('tool calls read as plain words', () => {
+  expect(activityOf('Read', {})).toBe('Reading files')
+  expect(activityOf('Grep', {})).toBe('Searching the project')
+  expect(activityOf('Edit', {})).toBe('Editing files')
+  expect(activityOf('Bash', { command: 'npm test -- --watch=false' })).toBe('Running the tests')
+  expect(activityOf('Bash', { command: 'pnpm add zod' })).toBe('Installing packages')
+  expect(activityOf('Bash', { command: 'git status' })).toBe('Working with git')
+  expect(activityOf('Bash', { command: 'ls -la' })).toBe('Running a command')
+  expect(activityOf('mcp__slack__post', {})).toBe('Using a connected app')
+  expect(activityOf(PROGRESS, {})).toBe(null)
+  expect(activityOf('TodoWrite', {})).toBe(null)
+})
+
+test('under the current step, what Claude is doing right now, in plain words', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Read notes', 'Write copy'] })
+  await callTool($, { tool: 'Read', file_path: '/work/a.md' })
+  await callTool($, { tool: 'Read', file_path: '/work/b.md' })
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Reading files (2)…')
+  expect(shown).not.toContain('a.md')
+
+  await callTool($, { tool: 'Bash', command: 'npm test' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Running the tests…')
+  expect(shown).not.toContain('Reading files')
+
+  // A finished step starts the next one with a clean line.
+  await callTool($, { tool: PROGRESS, task: 'Read notes', percent: 100 })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('Running the tests')
+})
+
+test('calm mode: nothing moves, and statuses read in bold', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  const result = await $.command.run({ command: 'glance', args: 'calm on' } as never)
+  expect(result.text).toContain('Calm mode is on')
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Read notes', 'Write copy'] })
+  // Only the clock text may change between frames; the bars and marks stay still.
+  const still = (lines: string[]) => lines.join('\n').replace(/\d+s/g, '')
+  const first = still(await texts($, 'terminal'))
+  await clock.advance(750)
+  const later = still(await texts($, 'terminal'))
+  expect(later).toBe(first)
+  expect(first).toContain('░░░░░░░░░░')
+
+  await callTool($, { tool: PROGRESS, task: 'Write copy', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const done = (await ui.findAll({ type: 'Text' })).find(one => one.text.includes('All done'))
+  await ui.unmount()
+  expect((done?.props as { bold?: boolean } | undefined)?.bold).toBe(true)
+})
+
+test('costs read in plain dollars', () => {
+  expect(formatCost(0.004)).toBe('<$0.01')
+  expect(formatCost(0.4199)).toBe('$0.42')
+  expect(formatCost(3)).toBe('$3.00')
+})
+
+test("in details, a job shows what it cost, and the history keeps it", async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  const measure = (usd: number) =>
+    $.session.measure({ context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: [], cost: { usd }, changed: ['cost'] } as never)
+  await measure(1)
+  await detailsOn($)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await measure(1.42)
+  expect((await texts($, 'terminal', 120)).join('\n')).toContain('$0.42')
+  // Simple keeps money out of view.
+  await $.command.run({ command: 'glance', args: 'details off' } as never)
+  expect((await texts($, 'terminal', 120)).join('\n')).not.toContain('$0.42')
+
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.command.run({ command: 'glance', args: 'history' } as never)
+  const pane = (await paneTexts($)).join('\n')
+  expect(pane).toContain('$0.42')
+})
+
+test('/glance-checklist works like /glance, so it never clashes with another mod called glance', async ($, on) => {
+  world(on)
+  const result = await $.command.run({ command: 'glance-checklist', args: 'details on' } as never)
+  expect(result.text).toBe('Glance details are on.')
+  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Details')
 })

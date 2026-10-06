@@ -5,6 +5,7 @@ import type {
   GlanceChecklist,
   GlanceHelper,
   GlanceHistoryEntry,
+  GlancePhase,
   GlanceTask,
   GlanceTaskSize,
   GlanceUsage,
@@ -38,11 +39,17 @@ const ALWAYS_ALLOWED = new Set([
 ])
 const STORE_KEY = 'glanceEnabled'
 const DETAIL_KEY = 'glanceDetail'
+const SOUND_KEY = 'glanceSound'
+const CALM_KEY = 'glanceCalm'
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 const METER = 10
 const LABEL_WIDTH = 7
 const TICK_MS = 250
+// Calm mode redraws only to keep times current.
+const CALM_TICK_MS = 5000
+// A job shorter than this finishes without a sound.
+const LONG_JOB_MS = 60_000
 const COLLAPSE_MS = 5000
 const RESEND_WINDOW_MS = 2 * 60 * 1000
 const LIMIT_WARN = 80
@@ -61,8 +68,10 @@ const enabledAtom = atom({ plugin: 'glance', key: 'glanceEnabled' } as const, tr
 const detailAtom = atom({ plugin: 'glance', key: 'detailLevel' } as const, 'simple')
 const checklistAtom = atom({ plugin: 'glance', key: 'checklist' } as const, null)
 const tickAtom = atom({ plugin: 'glance', key: 'tick' } as const, 0)
-const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null, contextPercent: null }
+const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null, contextPercent: null, costUsd: null }
 const usageAtom = atom({ plugin: 'glance', key: 'usage' } as const, NO_USAGE)
+const soundAtom = atom({ plugin: 'glance', key: 'soundMode' } as const, 'off')
+const calmAtom = atom({ plugin: 'glance', key: 'isCalm' } as const, false)
 const historyAtom = atom({ plugin: 'glance', key: 'historyView' } as const, null)
 const HISTORY_PANE = 'glance-history'
 const handoffAtom = atom({ plugin: 'glance', key: 'handoffState' } as const, 'idle')
@@ -362,6 +371,37 @@ export function reconcileBackground(list: GlanceChecklist, tasks: readonly Backg
   return [...kept, ...added]
 }
 
+/** What a tool call is doing, in plain words; null for planning tools and helpers, which show elsewhere. */
+export function activityOf(tool: string, input: { command?: unknown }): string | null {
+  if (tool === 'Read' || tool === 'NotebookRead') return 'Reading files'
+  if (tool === 'Grep' || tool === 'Glob' || tool === 'LS') return 'Searching the project'
+  if (tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit') return 'Editing files'
+  if (tool === 'Write') return 'Writing files'
+  if (tool === 'WebFetch') return 'Reading a web page'
+  if (tool === 'WebSearch') return 'Searching the web'
+  if (tool === 'Skill') return 'Following a skill'
+  if (tool.startsWith('mcp__') && !tool.startsWith(`mcp__${PLUGIN}__`)) return 'Using a connected app'
+  if (tool === 'Bash' || tool === 'PowerShell') {
+    const command = String(input.command ?? '')
+    if (/\b(test|tests|jest|vitest|pytest|mocha|playwright|rspec)\b/i.test(command)) return 'Running the tests'
+    if (/\b(npm|pnpm|yarn|bun|pip3?|brew|cargo|gem)\s+(install|add|i)\b/i.test(command)) return 'Installing packages'
+    if (/\bgit\s+\w+/.test(command)) return 'Working with git'
+    if (/\b(build|tsc|compile)\b/i.test(command)) return 'Building the project'
+    return 'Running a command'
+  }
+  return null
+}
+
+/** A job's cost in plain dollars: "$0.42", or "<$0.01" for less than a cent. */
+export function formatCost(usd: number): string {
+  return usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`
+}
+
+/** What the job has cost so far, from the session's spend; null where the host keeps no ledger. */
+function jobCost(list: GlanceChecklist, usage: GlanceUsage): number | null {
+  return usage.costUsd === null || list.costAtStart === null ? null : Math.max(0, usage.costUsd - list.costAtStart)
+}
+
 function isBusy(list: GlanceChecklist): boolean {
   return list.helpers.some(one => one.status === 'running')
 }
@@ -443,27 +483,57 @@ let limitLevel = 0
 // The main loop's running turn, for the Pause button; and whether a pause asked for its end.
 let runningTurn: string | undefined
 let isPausing = false
+// Mirrors the calm setting for the ticker, which runs outside any hook.
+let isCalmMode = false
+let tickerEvery = 0
 
 const now = ($: $) => $.clock.now()
 
 const syncTicker = ($: $, list: GlanceChecklist | null) => {
   const isAnimated = list !== null && (list.phase === 'working' || list.phase === 'needsYou' || list.phase === 'background')
-  if (isAnimated && ticker === undefined) {
-    ticker = $.clock.every(TICK_MS, () => void update($, tickAtom, tick => (tick ?? 0) + 1))
-  }
-  if (!isAnimated && ticker !== undefined) {
+  // Calm mode: nothing moves, so the clock only ticks to keep the times current.
+  const every = isCalmMode ? CALM_TICK_MS : TICK_MS
+  if (ticker !== undefined && (!isAnimated || tickerEvery !== every)) {
     ticker.cancel()
     ticker = undefined
+  }
+  if (isAnimated && ticker === undefined) {
+    tickerEvery = every
+    ticker = $.clock.every(every, () => void update($, tickAtom, tick => (tick ?? 0) + 1))
+  }
+}
+
+const ALERTS: Partial<Record<GlancePhase, { asset: string; words: string }>> = {
+  needsYou: { asset: 'sounds/needs-you.wav', words: 'Claude needs you' },
+  stuck: { asset: 'sounds/stuck.wav', words: 'Claude is stuck' },
+  done: { asset: 'sounds/done.wav', words: 'All done' },
+}
+
+/** A short sound (and, in voice mode, a few words) when Claude needs you, gets stuck or finishes a long job. */
+const alertFor = async ($: $, list: GlanceChecklist) => {
+  const alert = ALERTS[list.phase]
+  const mode = await read($, soundAtom)
+  if (!alert || mode === 'off' || !(await read($, enabledAtom))) return
+  // A quick answer needs no sound, and a job whose helpers still run is not finished yet.
+  if (list.phase === 'done' && (isBusy(list) || (list.finishedAt ?? (await now($))) - list.startedAt < LONG_JOB_MS)) return
+  try {
+    await $.audio.play({ asset: alert.asset })
+    if (mode === 'voice') await $.audio.speak(alert.words)
+  } catch {
+    // No player or voice on this computer: the band still shows it.
   }
 }
 
 const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | null) => {
   const at = await now($)
+  const before: { phase: GlancePhase | null } = { phase: null }
   const next = await update($, checklistAtom, list => {
+    before.phase = list?.phase ?? null
     const changed = list ? fn(list) : list
     return changed ? { ...changed, tasks: stampTimes(changed.tasks, at) } : changed
   })
   syncTicker($, next)
+  if (next !== null && next.phase !== before.phase) void alertFor($, next)
 
   return next
 }
@@ -486,6 +556,8 @@ const startJob = async ($: $, text: string, jobId: string) => {
     extraTokens: 0,
     extraCachedTokens: 0,
     stopKind: null,
+    activity: null,
+    costAtStart: (await read($, usageAtom)).costUsd,
     // Work still running from the last job stays in view.
     helpers: (previous?.helpers ?? []).filter(one => one.status === 'running'),
   }
@@ -639,7 +711,7 @@ const recordJob = async ($: $) => {
     if (list === null) return
     const project = await $.session.cwd()
     const day = dayKey(list.startedAt)
-    const entries = upsertEntry(await $.store.get(`${HISTORY_PREFIX}${day}`), entryFromChecklist(list, project))
+    const entries = upsertEntry(await $.store.get(`${HISTORY_PREFIX}${day}`), entryFromChecklist(list, project, jobCost(list, await read($, usageAtom))))
     await $.store.set(`${HISTORY_PREFIX}${day}`, entries)
     const view = await read($, historyAtom)
     if (view !== null && view.day === day && view.project === project) {
@@ -798,6 +870,10 @@ export function registerGlance(on: On): void {
     await update($, enabledAtom, () => stored !== false)
     const detail = await $.store.get(DETAIL_KEY)
     await update($, detailAtom, () => (detail === 'detailed' ? 'detailed' : 'simple'))
+    const sound = await $.store.get(SOUND_KEY)
+    await update($, soundAtom, () => (sound === 'chime' || sound === 'voice' ? sound : 'off'))
+    isCalmMode = (await $.store.get(CALM_KEY)) === true
+    await update($, calmAtom, () => isCalmMode)
     // The history keeps 30 days.
     for (const key of expiredHistoryKeys(await $.store.keys(), await now($))) {
       await $.store.delete(key)
@@ -838,8 +914,10 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glance',
       description:
-        'Glance: /glance on|off, details on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
+        'Glance: /glance on|off, details on|off, sound on|voice|off, calm on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
     })
+    // Another mod is called glance too: this name never clashes.
+    await $.command.register({ name: 'glance-checklist', description: 'Same as /glance' })
     // The name Glance had before, kept so old habits still work.
     await $.command.register({ name: 'simple', description: 'Same as /glance' })
     // A reload drops the module's timers; pick the animation back up.
@@ -848,8 +926,32 @@ export function registerGlance(on: On): void {
     return next(e)
   })
 
-  on('command.run', { command: ['glance', 'simple'] }, async ($, e) => {
+  on('command.run', { command: ['glance', 'glance-checklist', 'simple'] }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
+    if (arg.startsWith('sound')) {
+      const choice = arg.slice('sound'.length).trim()
+      const current = await read($, soundAtom)
+      const mode = choice === 'voice' ? 'voice' : choice === 'off' ? 'off' : choice === 'on' || current === 'off' ? 'chime' : 'off'
+      await update($, soundAtom, () => mode)
+      await $.store.set(SOUND_KEY, mode)
+      if (mode !== 'off') void $.audio.play({ asset: 'sounds/needs-you.wav' }).catch(() => undefined)
+      return {
+        text:
+          mode === 'off'
+            ? 'Sounds are off.'
+            : mode === 'voice'
+              ? 'Sounds and voice are on: you will hear when Claude needs you, gets stuck or finishes a long job.'
+              : 'Sounds are on: a chime when Claude needs you, gets stuck or finishes a long job.',
+      }
+    }
+    if (arg.startsWith('calm')) {
+      const choice = arg.slice('calm'.length).trim()
+      isCalmMode = choice === 'on' ? true : choice === 'off' ? false : !(await read($, calmAtom))
+      await update($, calmAtom, () => isCalmMode)
+      await $.store.set(CALM_KEY, isCalmMode)
+      syncTicker($, await read($, checklistAtom))
+      return { text: isCalmMode ? 'Calm mode is on: nothing moves, statuses are bold.' : 'Calm mode is off.' }
+    }
     if (arg.startsWith('history')) {
       const day = dayFromArgument(arg.slice('history'.length), await now($))
       if (day === null) {
@@ -934,6 +1036,7 @@ export function registerGlance(on: On): void {
       limitPercent: top ? top.percentUsed : null,
       limitLabel: top ? (LIMIT_LABEL[top.kind] ?? top.kind) : null,
       contextPercent: e.context.percent ?? null,
+      costUsd: e.cost?.usd ?? null,
     })
 
     return next(e)
@@ -1073,6 +1176,8 @@ export function registerGlance(on: On): void {
         extraTokens: list?.extraTokens ?? 0,
         extraCachedTokens: list?.extraCachedTokens ?? 0,
         stopKind: null,
+        activity: null,
+        costAtStart: list?.costAtStart ?? null,
         title: list?.title ?? 'Working on it',
         startedAt: list?.startedAt ?? started,
         jobId: list?.jobId ?? call.tool_use_id,
@@ -1093,7 +1198,11 @@ export function registerGlance(on: On): void {
     if (tool === PROGRESS_TOOL) {
       const input = e as unknown as { task?: unknown; percent?: unknown }
       const percent = Math.min(100, Math.max(0, Math.round(Number(input.percent) || 0)))
-      await change($, list => ({ ...list, tasks: applyProgress(list.tasks, String(input.task ?? ''), percent) }))
+      await change($, list => ({
+        ...list,
+        tasks: applyProgress(list.tasks, String(input.task ?? ''), percent),
+        activity: percent === 100 ? null : list.activity,
+      }))
 
       return { result: `Progress noted: ${percent}%.` }
     }
@@ -1114,6 +1223,15 @@ export function registerGlance(on: On): void {
       await setNeedsYou($, QUESTION)
     } else if (list?.phase === 'needsYou') {
       await setWorking($)
+    }
+    // What Claude is doing right now, in plain words, under the current step.
+    const doing = activityOf(tool, e as unknown as { command?: unknown })
+    if (doing !== null && list !== null) {
+      await change($, current => ({
+        ...current,
+        activity:
+          current.activity?.label === doing ? { label: doing, count: current.activity.count + 1 } : { label: doing, count: 1 },
+      }))
     }
 
     const ran = await next(e)
@@ -1228,6 +1346,7 @@ export function registerGlance(on: On): void {
     isPausing = false
 
     if (list !== null) {
+      await change($, current => (current.activity === null ? current : { ...current, activity: null }))
       if (wasPaused) {
         await change($, current => ({
           ...current,
@@ -1375,7 +1494,12 @@ export function registerGlance(on: On): void {
     const rows = view.entries.map(one => {
       const [mark, color] = marks[one.outcome]
       const took = one.finishedAt === null ? 'not finished' : formatDuration(one.finishedAt - one.startedAt)
-      const details = [`${one.stepsDone}/${one.stepsTotal}`, took, tokenNote(one.newTokens + one.cachedTokens, one.cachedTokens)]
+      const details = [
+        `${one.stepsDone}/${one.stepsTotal}`,
+        took,
+        tokenNote(one.newTokens + one.cachedTokens, one.cachedTokens),
+        typeof one.costUsd === 'number' ? formatCost(one.costUsd) : '',
+      ]
         .filter(Boolean)
         .join(' · ')
       return (
@@ -1394,6 +1518,8 @@ export function registerGlance(on: On): void {
     const time = finished.reduce((sum, one) => sum + (one.finishedAt! - one.startedAt), 0)
     const newTokens = view.entries.reduce((sum, one) => sum + one.newTokens, 0)
     const cached = view.entries.reduce((sum, one) => sum + one.cachedTokens, 0)
+    const priced = view.entries.filter(one => typeof one.costUsd === 'number')
+    const spent = priced.reduce((sum, one) => sum + (one.costUsd ?? 0), 0)
     const counts = (Object.keys(marks) as GlanceHistoryEntry['outcome'][])
       .map(outcome => [outcome, view.entries.filter(one => one.outcome === outcome).length] as const)
       .filter(([, count]) => count > 0)
@@ -1403,6 +1529,7 @@ export function registerGlance(on: On): void {
       counts.join(', '),
       formatDuration(time),
       tokenNote(newTokens + cached, cached),
+      priced.length > 0 ? formatCost(spent) : '',
     ]
       .filter(Boolean)
       .join(' · ')
@@ -1432,6 +1559,7 @@ export function registerGlance(on: On): void {
     const tick = list ? await read($, tickAtom) : 0
     const usage = isEnabled ? await read($, usageAtom) : NO_USAGE
     const isDetailed = isEnabled && (await read($, detailAtom)) === 'detailed'
+    const isCalm = isEnabled && (await read($, calmAtom))
     const handoff = isEnabled ? await read($, handoffAtom) : 'idle'
     const columns = Math.max(20, e.props.bodyColumns)
     const current = await now($)
@@ -1555,7 +1683,10 @@ export function registerGlance(on: On): void {
     const stepClock = list.finishedAt ?? current
     const jobTokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
     const jobCached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
-    const jobTokenNote = isDetailed ? tokenNote(jobTokens, jobCached) : ''
+    const spent = jobCost(list, usage)
+    const jobTokenNote = isDetailed
+      ? [tokenNote(jobTokens, jobCached), spent === null ? '' : formatCost(spent)].filter(Boolean).join(' · ')
+      : ''
     let header: RenderChildren
     if (list.phase === 'needsYou') {
       header = (
@@ -1568,13 +1699,13 @@ export function registerGlance(on: On): void {
       )
     } else if (list.phase === 'stuck') {
       header = (
-        <Text wrap="truncate-end" color="yellow">
+        <Text wrap="truncate-end" color="yellow" bold={isCalm}>
           {fit(`⚠ Stuck: ${list.stuckReason ?? FAILING}`, headerWidth).trimEnd()}
         </Text>
       )
     } else if (list.phase === 'stopped') {
       header = (
-        <Text wrap="truncate-end" dimColor>
+        <Text wrap="truncate-end" dimColor={!isCalm} bold={isCalm}>
           {fit(
             list.stopKind === 'pause'
               ? `‖ Paused · press Continue to pick up · ${list.title}`
@@ -1586,13 +1717,13 @@ export function registerGlance(on: On): void {
     } else if (list.phase === 'background') {
       const running = list.helpers.filter(one => one.status === 'running').length
       header = (
-        <Text wrap="truncate-end" color="cyan">
+        <Text wrap="truncate-end" color="cyan" bold={isCalm}>
           {fit(`◷ Still working in the background · ${running} left · ${list.title} · ${elapsed}`, headerWidth).trimEnd()}
         </Text>
       )
     } else if (list.phase === 'done') {
       header = (
-        <Text wrap="truncate-end" color="green">
+        <Text wrap="truncate-end" color="green" bold={isCalm}>
           {fit(`✓ All done · ${list.title} · took ${elapsed}${jobTokenNote ? ` · ${jobTokenNote}` : ''}`, headerWidth).trimEnd()}
         </Text>
       )
@@ -1681,7 +1812,9 @@ export function registerGlance(on: On): void {
         const sweepAt = tick % (METER + 3)
         const meter = hasPercent
           ? '█'.repeat(filled) + '░'.repeat(METER - filled)
-          : Array.from({ length: METER }, (_, cell) => (cell >= sweepAt - 2 && cell <= sweepAt ? '█' : '░')).join('')
+          : isCalm
+            ? '░'.repeat(METER)
+            : Array.from({ length: METER }, (_, cell) => (cell >= sweepAt - 2 && cell <= sweepAt ? '█' : '░')).join('')
         lines.push({
           key,
           isActive: true,
@@ -1695,6 +1828,21 @@ export function registerGlance(on: On): void {
             </Box>
           ),
         })
+        // What Claude is doing right now, in plain words.
+        if (list.phase === 'working' && list.activity !== null) {
+          const { label, count } = list.activity
+          lines.push({
+            key: 'activity',
+            isActive: false,
+            element: (
+              <Box key="activity" flexDirection="row">
+                <Text dimColor wrap="truncate-end">
+                  {fit(`    ${label}${count > 1 ? ` (${count})` : ''}…`, Math.max(0, columns - 1)).trimEnd()}
+                </Text>
+              </Box>
+            ),
+          })
+        }
       } else {
         lines.push({
           key,
@@ -1733,7 +1881,7 @@ export function registerGlance(on: On): void {
           .filter(Boolean)
           .join(' · ')
         const icon =
-          helper.status === 'running' ? SPINNER[tick % SPINNER.length]! : helper.status === 'failed' ? '✗' : '✓'
+          helper.status === 'running' ? (isCalm ? '◐' : SPINNER[tick % SPINNER.length]!) : helper.status === 'failed' ? '✗' : '✓'
         lines.push({
           key: helperKey,
           isActive: helper.status === 'running',

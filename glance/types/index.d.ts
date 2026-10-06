@@ -67,6 +67,10 @@ export type GlanceChecklist = {
   extraCachedTokens: number
   /** How a stopped job was stopped: Esc, or the Pause button. */
   stopKind: 'esc' | 'pause' | null
+  /** What Claude is doing right now, in plain words ("Reading files"), and how many times in a row. */
+  activity: { label: string; count: number } | null
+  /** The session's spend in US dollars when the job started; null where the host keeps no ledger. */
+  costAtStart: number | null
 }
 
 /** One plan window and how much of it is used. */
@@ -87,6 +91,8 @@ export type GlanceUsage = {
   limitLabel: string | null
   /** How full this chat's context window is, 0 to 100. */
   contextPercent: number | null
+  /** What the session has cost so far in US dollars; null where the host keeps no ledger. */
+  costUsd: number | null
 }
 
 /** How a job ended, as the history shows it. */
@@ -111,6 +117,8 @@ export type GlanceHistoryEntry = {
   openSteps: string[]
   /** A quick answer with no plan: listed in the panel, left out of the team report. */
   isQuickAnswer: boolean
+  /** What the job cost in US dollars; absent where the host keeps no ledger. */
+  costUsd?: number | null
 }
 
 /** What the history pane shows: one day of one project. */
@@ -137,6 +145,10 @@ declare module 'claude-code' {
       historyView: GlanceHistoryView | null
       /** The Fresh chat button: `armed` waits for a second press to confirm. */
       handoffState: 'idle' | 'armed' | 'working'
+      /** Alerts: `chime` plays a short sound when Claude needs you, gets stuck or finishes a long job; `voice` also says it. */
+      soundMode: 'off' | 'chime' | 'voice'
+      /** Calm mode: nothing moves, and statuses read in bold. */
+      isCalm: boolean
     }
   }
 }
