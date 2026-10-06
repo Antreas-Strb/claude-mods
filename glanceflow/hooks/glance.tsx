@@ -83,6 +83,9 @@ const TIDY_AT_DEFAULT = 50
 const TIDY_CHOICES = [0, 40, 50, 60, 75] as const
 const TIDY_KEY = 'glanceTidyAt'
 const CHECKPOINT_KEY = 'lastCheckpoint'
+// Each recent chat's checklist, by session id, so a resumed chat picks up where it was.
+const RESUME_KEY = 'glanceResume'
+const RESUME_KEEP = 20
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly', spend_limit: 'spending' }
 
 const DENIED = 'you said no to a step, so Claude paused'
@@ -604,6 +607,7 @@ type $ = EngineInterface
 // Module state: a reload starts these over (session.start restarts the ticker).
 let ticker: Timer | undefined
 let collapse: Timer | undefined
+let saveTimer: Timer | undefined
 let failuresInARow = 0
 // A message held back for a password: memory only, never stored, and only to let the same one through on a resend.
 let heldMessage: { text: string; at: number } | null = null
@@ -771,6 +775,47 @@ const alertFor = async ($: $, list: GlanceChecklist) => {
   }
 }
 
+type SavedChecklists = Record<string, { at: number; list: GlanceChecklist }>
+
+/** Keeps this chat's checklist, a second after it changes, for when the chat is resumed. */
+const saveSoon = ($: $) => {
+  if (saveTimer !== undefined) return
+  saveTimer = $.clock.after(1000, () => {
+    saveTimer = undefined
+    void saveChecklist($).catch(() => undefined)
+  })
+}
+
+const saveChecklist = async ($: $) => {
+  const id = await $.session.id()
+  const list = await read($, checklistAtom)
+  const saved = ((await $.store.get(RESUME_KEY)) ?? {}) as SavedChecklists
+  const others = Object.entries(saved)
+    .filter(([key]) => key !== id)
+    .sort((a, b) => b[1].at - a[1].at)
+    .slice(0, RESUME_KEEP - 1)
+  await $.store.set(RESUME_KEY, Object.fromEntries(list === null ? others : [[id, { at: await now($), list }], ...others]))
+}
+
+/** A resumed chat gets its checklist back; work that was under way shows as paused, with Continue. */
+const restoreChecklist = async ($: $) => {
+  const id = await $.session.id().catch(() => null)
+  const saved = id === null ? undefined : (((await $.store.get(RESUME_KEY)) ?? {}) as SavedChecklists)[id]
+  if (saved === undefined || saved.list.phase === 'done') return
+  const list = saved.list
+  // Still true after a restart: a plan waiting for Start, or Claude waiting for a reply. Anything else was cut off.
+  const holds = list.phase === 'stopped' || (list.phase === 'needsYou' && (list.needsYouReason === APPROVE || list.needsYouReason === WAITING))
+  const restored: GlanceChecklist = {
+    ...list,
+    activity: null,
+    isCollapsed: false,
+    helpers: list.helpers.filter(one => one.status !== 'running'),
+    ...(holds ? {} : { phase: 'stopped' as const, stopKind: 'pause' as const, needsYouReason: null, stuckReason: null, finishedAt: saved.at }),
+  }
+  await update($, checklistAtom, () => restored)
+  syncTicker($, restored)
+}
+
 const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | null) => {
   const at = await now($)
   const before: { phase: GlancePhase | null } = { phase: null }
@@ -780,6 +825,7 @@ const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | nul
     return changed ? { ...changed, tasks: stampTimes(changed.tasks, at) } : changed
   })
   syncTicker($, next)
+  saveSoon($)
   if (next !== null && next.phase !== before.phase) {
     void alertFor($, next)
     void noticeFor($, next)
@@ -834,6 +880,7 @@ const startJob = async ($: $, text: string, jobId: string) => {
   collapse?.cancel()
   await update($, checklistAtom, () => list)
   syncTicker($, list)
+  saveSoon($)
   // Name the job in the background; a newer job wins.
   $.clock.after(0, () => void nameJob($, text, jobId))
 }
@@ -1397,6 +1444,10 @@ export function registerGlance(on: On): void {
     const thisSession = await $.session.id().catch(() => null)
     await update($, checkpointAtom, () => (saved?.sessionId === thisSession && typeof saved?.at === 'number' ? saved.at : null))
     await update($, calmAtom, () => isCalmMode)
+    // A resumed chat: its checklist comes back. A reload keeps the one it has.
+    if ((await read($, checklistAtom)) === null) {
+      await restoreChecklist($)
+    }
     // The history keeps 30 days.
     for (const key of expiredHistoryKeys(await $.store.keys(), await now($))) {
       await $.store.delete(key)
@@ -1806,6 +1857,7 @@ export function registerGlance(on: On): void {
         helpers: list?.helpers ?? [],
       }))
       syncTicker($, await read($, checklistAtom))
+      saveSoon($)
       if (await holdForApproval($)) {
         return {
           result:

@@ -1987,6 +1987,76 @@ test('each step shows the files Claude added or changed, in the Plan and in Hist
   expect(filesNote([])).toBe('')
 })
 
+/** The same world as `world`, with the clock and a store the test can read, starting with `entries`. */
+function resumeWorld(on: On, entries: Record<string, unknown> = {}) {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  const store = new Map(Object.entries(entries))
+  on('store.get', (_, e) => ({ value: store.get((e as { key: string }).key) }) as never)
+  on('store.set', (_, e) => {
+    store.set((e as { key: string }).key, (e as { value: unknown }).value)
+    return { value: undefined } as never
+  })
+  on('store.delete', (_, e) => {
+    store.delete((e as { key: string }).key)
+    return { value: undefined } as never
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }) as never)
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'Build my landing page', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.Notification', () => ({}) as never)
+  on('session.id', () => ({ value: 'chat-1' }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  return { clock, store }
+}
+
+test("a chat's checklist is kept as it changes, for when the chat is resumed", async ($, on) => {
+  const { clock, store } = resumeWorld(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  await callTool($, { tool: PROGRESS, task: 'Write the page', percent: 100, summary: 'Wrote the page' })
+  await clock.advance(1500)
+  const kept = (store.get('glanceResume') as Record<string, { list: { phase: string; tasks: { name: string; status: string }[] } }>)['chat-1']
+  expect(kept?.list.phase).toBe('working')
+  expect(kept?.list.tasks.map(one => `${one.name}:${one.status}`)).toEqual(['Write the page:done', 'Check it:active'])
+})
+
+test('a resumed chat gets its checklist back, paused, and Continue picks it up', async ($, on) => {
+  const task = (name: string, status: string) => ({
+    id: name, name, status, percent: status === 'done' ? 100 : 40, hasReported: true, size: 'M', summary: status === 'done' ? 'Wrote the page' : null,
+    tokens: 0, cachedTokens: 0, startedAt: 1_000_000, finishedAt: status === 'done' ? 1_060_000 : null,
+  })
+  const list = {
+    title: 'Build my landing page', phase: 'working', tasks: [task('Write the page', 'done'), task('Check it', 'active')],
+    needsYouReason: null, stuckReason: null, startedAt: 1_000_000, finishedAt: null, isCollapsed: false, hasPlan: true, jobId: 'job-1',
+    planAt: 1_000_000, plannedCount: 2, extraTokens: 0, extraCachedTokens: 0, stopKind: null, approval: 'none', costAtStart: null, paceMs: null,
+    activity: { label: 'Running a command', count: 1, detail: null, target: null },
+    helpers: [{ id: 'h1', stepId: 'Check it', kind: 'helper', label: 'Check phones', type: 'Explore', model: null, effort: null, status: 'running', tokens: 0 }],
+  }
+  resumeWorld(on, {
+    glanceResume: { 'chat-1': { at: 1_100_000, list }, 'chat-2': { at: 1_100_000, list: { ...list, title: 'Another chat' } } },
+  })
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('‖ Paused')
+  expect(shown).toContain('Check it')
+  expect(shown).toContain('▶ Continue')
+  expect(shown).not.toContain('Another chat')
+  // A helper that was running died with the old process.
+  expect(shown).not.toContain('Check phones')
+
+  await $.turn.start({ text: 'continue', turnId: 't2' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('Paused')
+  expect(shown).toContain('Check it')
+  expect((await callTool($, { tool: 'Bash', command: 'ls' })).deny).toBeUndefined()
+})
+
 const PLAN_PANE = {
   plugin: 'glanceflow',
   component: 'Pane',
