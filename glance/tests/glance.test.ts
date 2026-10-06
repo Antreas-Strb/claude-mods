@@ -2,15 +2,15 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { carryTokens, cleanName, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/clean-view'
+import { carryTokens, cleanName, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, shiftDay, teamReport } from '../hooks/history'
 
-const PLAN = 'mcp__clean-view__plan_steps'
-const PROGRESS = 'mcp__clean-view__report_progress'
+const PLAN = 'mcp__glance__plan_steps'
+const PROGRESS = 'mcp__glance__report_progress'
 const SURFACES = ['terminal', 'desktop'] as const
 const BAND = {
-  plugin: 'clean-view',
+  plugin: 'glance',
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,
@@ -41,7 +41,7 @@ function world(on: On) {
 
 /** Turns on the detailed view: models, tokens, cache and plan usage. */
 async function detailsOn($: Engine) {
-  await $.command.run({ command: 'simple', args: 'details on' } as never)
+  await $.command.run({ command: 'glance', args: 'details on' } as never)
 }
 
 async function texts($: Engine, surface: (typeof SURFACES)[number], bodyColumns = 80): Promise<string[]> {
@@ -99,7 +99,7 @@ test('a to-do list plus a 60% report draws done, current, next and up next rows'
     expect(shown).toContain('60%')
     expect(shown).toContain('Next')
     expect(shown).toContain('Up next')
-    expect(shown).toContain('Clean View: Simple')
+    expect(shown).toContain('Glance: Simple')
   }
 })
 
@@ -116,15 +116,15 @@ test('a permission prompt shows Needs you', async ($, on) => {
   }
 })
 
-test('/simple off hides the band but keeps the button', async ($, on) => {
+test('/glance off hides the band but keeps the button', async ($, on) => {
   world(on)
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
-  await $.command.run({ command: 'simple', args: 'off' } as never)
+  await $.command.run({ command: 'glance', args: 'off' } as never)
 
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).not.toContain('Understand your request')
-    expect(shown).toContain('Clean View: Off')
+    expect(shown).toContain('Glance: Off')
   }
 })
 
@@ -257,7 +257,7 @@ test('overall progress, time left and a grown plan show in the header and footer
   expect(shown).toContain('38%')
   expect(shown).toContain('about 5m left')
 
-  const footer = await $.ui.mount({ plugin: 'clean-view', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
+  const footer = await $.ui.mount({ plugin: 'glance', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
   expect((await footer.find({ type: 'Text' }))?.text).toContain('◎ 38% · ~5m')
   await footer.unmount()
 
@@ -529,7 +529,7 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
   for (const surface of SURFACES) {
     const simple = (await texts($, surface, 120)).join('\n')
     expect(simple).toContain('Find the prices')
-    expect(simple).toContain('Clean View: Simple')
+    expect(simple).toContain('Glance: Simple')
     expect(simple).not.toContain('Haiku 4.5')
     expect(simple).not.toContain('tokens')
     expect(simple).not.toContain('cached')
@@ -540,7 +540,7 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
   await ui.press({ key: 'toggle' })
   await ui.unmount()
   const detailed = (await texts($, 'terminal', 120)).join('\n')
-  expect(detailed).toContain('Clean View: Details')
+  expect(detailed).toContain('Glance: Details')
   expect(detailed).toContain('Explore · Haiku 4.5')
   expect(detailed).toContain('2.4k new · 10k cached')
   expect(detailed).toContain('Plan usage: 5-hour 42%')
@@ -575,13 +575,13 @@ test('one button cycles Simple, Details and Off', async ($, on) => {
     await ui.press({ key: 'toggle' })
     await ui.unmount()
   }
-  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Simple')
+  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Simple')
   await press()
-  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Details')
+  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Details')
   await press()
-  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Off')
+  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Off')
   await press()
-  expect((await texts($, 'terminal')).join('\n')).toContain('Clean View: Simple')
+  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Simple')
 })
 
 test('in details, the current step fills gradually and shows its time; done steps show how long they took', async ($, on) => {
@@ -649,9 +649,9 @@ test("Claude's final answer counts in the job's total, not in the last step", as
 })
 
 const PANE = {
-  plugin: 'clean-view',
+  plugin: 'glance',
   component: 'Pane',
-  requestId: 'clean-view-history',
+  requestId: 'glance-history',
   props: { title: 'History', isFocused: true, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
@@ -685,13 +685,13 @@ describe('history days', () => {
 
   test('days older than 30 are cleaned away', () => {
     const now = new Date(2026, 9, 6, 12).getTime()
-    expect(expiredHistoryKeys(['history:2026-08-01', 'history:2026-09-20', 'cleanViewEnabled'], now)).toEqual([
+    expect(expiredHistoryKeys(['history:2026-08-01', 'history:2026-09-20', 'glanceEnabled'], now)).toEqual([
       'history:2026-08-01',
     ])
   })
 })
 
-test("each finished job is saved, and /simple history shows the day's jobs for this project", async ($, on) => {
+test("each finished job is saved, and /glance history shows the day's jobs for this project", async ($, on) => {
   const clock = mock.clock(on, { now: new Date(2026, 9, 6, 9, 42).getTime() })
   mock.store(on)
   const project = { cwd: '/work/landing-site' }
@@ -723,7 +723,7 @@ test("each finished job is saved, and /simple history shows the day's jobs for t
   await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer' })
   project.cwd = '/work/landing-site'
 
-  const result = await $.command.run({ command: 'simple', args: 'history' } as never)
+  const result = await $.command.run({ command: 'glance', args: 'history' } as never)
   expect(result.text).toBe(`History for ${dayKey(clock.now())}: 2 tasks.`)
 
   const shown = (await paneTexts($)).join('\n')
@@ -740,7 +740,7 @@ test("each finished job is saved, and /simple history shows the day's jobs for t
 test('a day with nothing saved says so', async ($, on) => {
   world(on)
   historyWorld(on, { cwd: '/work/landing-site' })
-  await $.command.run({ command: 'simple', args: 'history 2026-01-01' } as never)
+  await $.command.run({ command: 'glance', args: 'history 2026-01-01' } as never)
   expect((await paneTexts($)).join('\n')).toContain('No tasks saved for this project on that day yet.')
 })
 
@@ -773,14 +773,14 @@ test('the team report is plain: done, in progress, stuck and time, without token
   expect(report).not.toContain('cached')
 })
 
-test('the band has History and Fresh chat buttons while Clean View is on', async ($, on) => {
+test('the band has History and Fresh chat buttons while Glance is on', async ($, on) => {
   world(on)
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).toContain('☰ History')
     expect(shown).toContain('↻ Fresh chat')
   }
-  await $.command.run({ command: 'simple', args: 'off' } as never)
+  await $.command.run({ command: 'glance', args: 'off' } as never)
   const off = (await texts($, 'terminal')).join('\n')
   expect(off).not.toContain('☰ History')
 })
@@ -819,7 +819,7 @@ test('the History button opens the panel; the day picker moves between days', as
   expect(pane).toContain('Later ▶')
 
   const picker = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await $.ui.select({ plugin: 'clean-view', key: 'day', value: dayKey(clock.now()) })
+  await $.ui.select({ plugin: 'glance', key: 'day', value: dayKey(clock.now()) })
   await picker.unmount()
   expect((await paneTexts($)).join('\n')).toContain('No tasks saved')
   expect(shiftDay('2026-10-01', -1)).toBe('2026-09-30')
@@ -840,7 +840,7 @@ test('Team report shows the report and copies it', async ($, on) => {
     copied = e.text
     return { value: { isCopied: true } } as never
   })
-  await $.command.run({ command: 'simple', args: 'history' } as never)
+  await $.command.run({ command: 'glance', args: 'history' } as never)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'report' })
@@ -955,7 +955,7 @@ test("a paused step's time stands still", async ($, on) => {
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
   await clock.advance(30_000)
-  await $.command.run({ command: 'simple', args: 'pause' } as never)
+  await $.command.run({ command: 'glance', args: 'pause' } as never)
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
 
   const before = (await texts($, 'terminal', 120)).join('\n')
@@ -964,4 +964,12 @@ test("a paused step's time stands still", async ($, on) => {
   const after = (await texts($, 'terminal', 120)).join('\n')
   expect(after).toContain('30s · ')
   expect(after).not.toContain('5m 30s')
+})
+
+test('/simple still works as another name for /glance', async ($, on) => {
+  world(on)
+  await $.command.run({ command: 'simple', args: 'off' } as never)
+  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Off')
+  await $.command.run({ command: 'glance', args: 'on' } as never)
+  expect((await texts($, 'terminal')).join('\n')).toContain('Glance: Simple')
 })

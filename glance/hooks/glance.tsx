@@ -2,12 +2,12 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderChildren, RenderSurface, Timer } from 'claude-code'
 
 import type {
-  CleanViewChecklist,
-  CleanViewHelper,
-  CleanViewHistoryEntry,
-  CleanViewTask,
-  CleanViewTaskSize,
-  CleanViewUsage,
+  GlanceChecklist,
+  GlanceHelper,
+  GlanceHistoryEntry,
+  GlanceTask,
+  GlanceTaskSize,
+  GlanceUsage,
 } from '../types'
 import {
   HISTORY_PREFIX,
@@ -24,7 +24,7 @@ import {
 } from './history'
 import { findSecrets, maskPrivate } from './privacy'
 
-const PLUGIN = 'clean-view'
+const PLUGIN = 'glance'
 const PLAN_TOOL = `mcp__${PLUGIN}__plan_steps`
 const PROGRESS_TOOL = `mcp__${PLUGIN}__report_progress`
 const ALWAYS_ALLOWED = new Set([
@@ -36,8 +36,8 @@ const ALWAYS_ALLOWED = new Set([
   PLAN_TOOL,
   PROGRESS_TOOL,
 ])
-const STORE_KEY = 'cleanViewEnabled'
-const DETAIL_KEY = 'cleanViewDetail'
+const STORE_KEY = 'glanceEnabled'
+const DETAIL_KEY = 'glanceDetail'
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 const METER = 10
@@ -48,7 +48,7 @@ const RESEND_WINDOW_MS = 2 * 60 * 1000
 const LIMIT_WARN = 80
 const LIMIT_ALERT = 95
 const LONG_CHAT = 75
-const SIZE_WEIGHT: Record<CleanViewTaskSize, number> = { S: 1, M: 2, L: 3 }
+const SIZE_WEIGHT: Record<GlanceTaskSize, number> = { S: 1, M: 2, L: 3 }
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly', spend_limit: 'spending' }
 
 const DENIED = 'you said no to a step, so Claude paused'
@@ -57,15 +57,15 @@ const PERMISSION = 'Claude needs your OK to continue'
 const QUESTION = 'Claude has a question for you'
 const WAITING = 'Claude is waiting for your reply'
 
-const enabledAtom = atom({ plugin: 'clean-view', key: 'cleanViewEnabled' } as const, true)
-const detailAtom = atom({ plugin: 'clean-view', key: 'detailLevel' } as const, 'simple')
-const checklistAtom = atom({ plugin: 'clean-view', key: 'checklist' } as const, null)
-const tickAtom = atom({ plugin: 'clean-view', key: 'tick' } as const, 0)
-const NO_USAGE: CleanViewUsage = { limits: [], limitPercent: null, limitLabel: null, contextPercent: null }
-const usageAtom = atom({ plugin: 'clean-view', key: 'usage' } as const, NO_USAGE)
-const historyAtom = atom({ plugin: 'clean-view', key: 'historyView' } as const, null)
-const HISTORY_PANE = 'clean-view-history'
-const handoffAtom = atom({ plugin: 'clean-view', key: 'handoffState' } as const, 'idle')
+const enabledAtom = atom({ plugin: 'glance', key: 'glanceEnabled' } as const, true)
+const detailAtom = atom({ plugin: 'glance', key: 'detailLevel' } as const, 'simple')
+const checklistAtom = atom({ plugin: 'glance', key: 'checklist' } as const, null)
+const tickAtom = atom({ plugin: 'glance', key: 'tick' } as const, 0)
+const NO_USAGE: GlanceUsage = { limits: [], limitPercent: null, limitLabel: null, contextPercent: null }
+const usageAtom = atom({ plugin: 'glance', key: 'usage' } as const, NO_USAGE)
+const historyAtom = atom({ plugin: 'glance', key: 'historyView' } as const, null)
+const HISTORY_PANE = 'glance-history'
+const handoffAtom = atom({ plugin: 'glance', key: 'handoffState' } as const, 'idle')
 const HANDOFF_CONFIRM_MS = 8000
 // What the Continue button sends, as the person's own words; turn.start knows it and keeps the job going.
 const CONTINUE_TEXT = 'Please continue where you left off.'
@@ -74,7 +74,7 @@ Cover, briefly: the goal; what is already done; what is left, in order; decision
 or links that matter; and the very next step. Under 300 words, no preamble.
 Start with exactly: "Continuing from an earlier chat. Here is where things stand:"`
 
-const PROMPT_SECTION = `# Clean View (progress checklist)
+const PROMPT_SECTION = `# Glance (progress checklist)
 The person is not technical and sees a simple checklist instead of tool calls.
 - A question you can answer straight away, with no tools, needs no plan: just answer.
 - Before you use any other tool, call plan_steps (tool ${PLAN_TOOL}) with 2 to 8 steps in order. If it is deferred, load it with ToolSearch first. If this session has TodoWrite or TaskCreate you may use that to-do list as the plan instead.
@@ -148,12 +148,12 @@ function fit(text: string, width: number): string {
   return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text.padEnd(width)
 }
 
-function task(name: string, status: CleanViewTask['status'], id = name, size: CleanViewTaskSize = 'M'): CleanViewTask {
+function task(name: string, status: GlanceTask['status'], id = name, size: GlanceTaskSize = 'M'): GlanceTask {
   return { id, name, status, percent: status === 'done' ? 100 : 0, hasReported: status === 'done', size, tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null }
 }
 
 /** Token counts move to the new plan's step of the same name; the rest go to its first step, so the job total holds. */
-export function carryTokens(old: CleanViewTask[], next: CleanViewTask[]): CleanViewTask[] {
+export function carryTokens(old: GlanceTask[], next: GlanceTask[]): GlanceTask[] {
   const used = new Set<string>()
   const carried = next.map(one => {
     const same = old.find(before => before.name === one.name && !used.has(before.id))
@@ -191,7 +191,7 @@ export function tokenNote(tokens: number, cachedTokens: number): string {
   return `${formatTokens(tokens - cachedTokens)} new · ${formatTokens(cachedTokens)} cached`
 }
 
-function sizeOf(raw: unknown): CleanViewTaskSize {
+function sizeOf(raw: unknown): GlanceTaskSize {
   const size = String(raw ?? '').trim().toUpperCase()
 
   return size === 'S' || size === 'L' ? size : 'M'
@@ -199,7 +199,7 @@ function sizeOf(raw: unknown): CleanViewTaskSize {
 
 /** Overall progress: finished work out of the plan, S/M/L counting 1/2/3, the current step in part. */
 export function overallProgress(
-  tasks: CleanViewTask[],
+  tasks: GlanceTask[],
   activePercent?: number,
 ): { percent: number; doneCount: number; work: number } {
   const total = tasks.reduce((sum, one) => sum + SIZE_WEIGHT[one.size], 0)
@@ -219,7 +219,7 @@ export function overallProgress(
 }
 
 /** Each step's start and end time, stamped as its status changes. */
-export function stampTimes(tasks: CleanViewTask[], at: number): CleanViewTask[] {
+export function stampTimes(tasks: GlanceTask[], at: number): GlanceTask[] {
   return tasks.map(one => {
     if (one.status === 'upcoming') return one.startedAt === null && one.finishedAt === null ? one : { ...one, startedAt: null, finishedAt: null }
     if (one.status === 'active') return one.startedAt === null || one.finishedAt !== null ? { ...one, startedAt: one.startedAt ?? at, finishedAt: null } : one
@@ -235,7 +235,7 @@ const DEFAULT_UNIT_MS = 90_000
  * unit of size. It fills gradually, stays below 100 until the step is checked off, and never falls below
  * what Claude reported.
  */
-export function stepEstimate(list: CleanViewChecklist, one: CleanViewTask, at: number) {
+export function stepEstimate(list: GlanceChecklist, one: GlanceTask, at: number) {
   const done = list.tasks.filter(
     step => step.status === 'done' && step.startedAt !== null && step.finishedAt !== null && step.finishedAt > step.startedAt,
   )
@@ -255,7 +255,7 @@ function leftLabel(ms: number): string {
 }
 
 /** Time left at this job's own pace since the plan; nothing until two steps are done. */
-export function timeLeft(list: CleanViewChecklist, at: number): number | null {
+export function timeLeft(list: GlanceChecklist, at: number): number | null {
   const { doneCount, work } = overallProgress(list.tasks)
   if (list.planAt === null || doneCount < 2 || work <= 0 || work >= 1) return null
 
@@ -266,7 +266,7 @@ export function timeLeft(list: CleanViewChecklist, at: number): number | null {
  * Steps still open after Claude answered. The last step alone still open counts as done:
  * Claude finished but forgot to report 100.
  */
-function hasUnfinishedWork(tasks: CleanViewTask[]): boolean {
+function hasUnfinishedWork(tasks: GlanceTask[]): boolean {
   const open = tasks.filter(one => one.status !== 'done')
 
   return open.length > 1 || (open.length === 1 && open[0] !== tasks[tasks.length - 1])
@@ -296,14 +296,14 @@ export function prettyModel(model: string | null | undefined): string | null {
 }
 
 /** The step new helpers belong to: the current one, or the last one once all are done. */
-function currentStepId(list: CleanViewChecklist): string {
+function currentStepId(list: GlanceChecklist): string {
   return (list.tasks.find(one => one.status === 'active') ?? list.tasks[list.tasks.length - 1])?.id ?? ''
 }
 
 export type BackgroundTask = { id: string; type: string; status: string; description: string }
 
 /** Background tasks as the latest list has them: new ones join, ones no longer listed have finished. */
-export function reconcileBackground(list: CleanViewChecklist, tasks: readonly BackgroundTask[]): CleanViewHelper[] {
+export function reconcileBackground(list: GlanceChecklist, tasks: readonly BackgroundTask[]): GlanceHelper[] {
   const listed = new Map(tasks.map(one => [`bg:${one.id}`, one]))
   const kept = list.helpers.map(helper => {
     if (helper.kind !== 'background' || helper.status !== 'running') return helper
@@ -314,7 +314,7 @@ export function reconcileBackground(list: CleanViewChecklist, tasks: readonly Ba
   const added = tasks
     .filter(one => !known.has(`bg:${one.id}`))
     .map(
-      (one): CleanViewHelper => ({
+      (one): GlanceHelper => ({
         id: `bg:${one.id}`,
         stepId: currentStepId(list),
         kind: 'background',
@@ -330,7 +330,7 @@ export function reconcileBackground(list: CleanViewChecklist, tasks: readonly Ba
   return [...kept, ...added]
 }
 
-function isBusy(list: CleanViewChecklist): boolean {
+function isBusy(list: GlanceChecklist): boolean {
   return list.helpers.some(one => one.status === 'running')
 }
 
@@ -346,7 +346,7 @@ function formatLeft(ms: number): string {
 }
 
 /** Keeps exactly one active step while any step is unfinished. */
-function settle(tasks: CleanViewTask[]): CleanViewTask[] {
+function settle(tasks: GlanceTask[]): GlanceTask[] {
   const lastActive = tasks.map(one => one.status).lastIndexOf('active')
   const fixed = tasks.map((one, index) =>
     one.status === 'active' && index !== lastActive ? { ...one, status: 'upcoming' as const } : one,
@@ -360,7 +360,7 @@ function settle(tasks: CleanViewTask[]): CleanViewTask[] {
 }
 
 /** Applies a progress report: earlier steps check off, 100 moves to the next. */
-export function applyProgress(tasks: CleanViewTask[], rawName: string, rawPercent: number): CleanViewTask[] {
+export function applyProgress(tasks: GlanceTask[], rawName: string, rawPercent: number): GlanceTask[] {
   const name = cleanName(rawName)
   const percent = Math.min(100, Math.max(0, Math.round(Number(rawPercent) || 0)))
   let list = [...tasks]
@@ -385,8 +385,8 @@ export function applyProgress(tasks: CleanViewTask[], rawName: string, rawPercen
 
 function todosToTasks(
   todos: ReadonlyArray<{ content: string; status: string }>,
-  previous: CleanViewTask[],
-): CleanViewTask[] {
+  previous: GlanceTask[],
+): GlanceTask[] {
   return carryTokens(previous, settle(
     todos.map((todo, index) => {
       const name = cleanName(todo.content)
@@ -414,7 +414,7 @@ let isPausing = false
 
 const now = ($: $) => $.clock.now()
 
-const syncTicker = ($: $, list: CleanViewChecklist | null) => {
+const syncTicker = ($: $, list: GlanceChecklist | null) => {
   const isAnimated = list !== null && (list.phase === 'working' || list.phase === 'needsYou' || list.phase === 'background')
   if (isAnimated && ticker === undefined) {
     ticker = $.clock.every(TICK_MS, () => void update($, tickAtom, tick => (tick ?? 0) + 1))
@@ -425,7 +425,7 @@ const syncTicker = ($: $, list: CleanViewChecklist | null) => {
   }
 }
 
-const change = async ($: $, fn: (list: CleanViewChecklist) => CleanViewChecklist | null) => {
+const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | null) => {
   const at = await now($)
   const next = await update($, checklistAtom, list => {
     const changed = list ? fn(list) : list
@@ -438,7 +438,7 @@ const change = async ($: $, fn: (list: CleanViewChecklist) => CleanViewChecklist
 
 const startJob = async ($: $, text: string, jobId: string) => {
   const previous = await read($, checklistAtom)
-  const list: CleanViewChecklist = {
+  const list: GlanceChecklist = {
     title: cleanName(text.split('\n')[0]),
     phase: 'working',
     tasks: stampTimes([task('Understand your request', 'active'), task('Plan the steps', 'upcoming')], await now($)),
@@ -531,7 +531,7 @@ const showHistory = async ($: $, day: string, isOpening: boolean) => {
   const project = await $.session.cwd()
   const stored = await $.store.get(`${HISTORY_PREFIX}${day}`)
   // Entries saved before the report fields existed get empty ones.
-  const entries = (Array.isArray(stored) ? (stored as CleanViewHistoryEntry[]) : [])
+  const entries = (Array.isArray(stored) ? (stored as GlanceHistoryEntry[]) : [])
     .filter(one => one.project === project)
     .map(one => ({ ...one, doneSteps: one.doneSteps ?? [], openSteps: one.openSteps ?? [], isQuickAnswer: one.isQuickAnswer ?? false }))
   const today = dayKey(await now($))
@@ -580,12 +580,12 @@ const startFreshChat = async ($: $) => {
       return
     }
     const note = reply.text.trim()
-    // Kept in case anything below fails: /simple handoff note puts it back in the prompt box.
+    // Kept in case anything below fails: /glance handoff note puts it back in the prompt box.
     await $.store.set(HANDOFF_KEY, { at: await now($), note })
     try {
       await $.command.run({ command: 'clear', args: '' })
     } catch {
-      $.ui.toast("Couldn't clear the chat. Type /simple handoff note to get the handoff note.")
+      $.ui.toast("Couldn't clear the chat. Type /glance handoff note to get the handoff note.")
       return
     }
     try {
@@ -641,7 +641,7 @@ const settleFinished = async ($: $, at: number, isNewAnswer: boolean) => {
   }
 }
 
-const addHelper = ($: $, helper: Omit<CleanViewHelper, 'stepId'>) =>
+const addHelper = ($: $, helper: Omit<GlanceHelper, 'stepId'>) =>
   change($, current => ({
     ...current,
     helpers: [...current.helpers.filter(one => one.id !== helper.id), { ...helper, stepId: currentStepId(current) }],
@@ -720,7 +720,7 @@ const holdSecretMessage = async ($: $, text: string, kinds: string[]) => {
   )
 }
 
-const measureUsage = async ($: $, usage: CleanViewUsage) => {
+const measureUsage = async ($: $, usage: GlanceUsage) => {
   await update($, usageAtom, () => usage)
   const level = usage.limitPercent === null ? 0 : usage.limitPercent >= LIMIT_ALERT ? 2 : usage.limitPercent >= LIMIT_WARN ? 1 : 0
   if (level > limitLevel && usage.limitPercent !== null) {
@@ -732,7 +732,7 @@ const measureUsage = async ($: $, usage: CleanViewUsage) => {
 const setEnabled = async ($: $, isEnabled: boolean) => {
   await update($, enabledAtom, () => isEnabled)
   await $.store.set(STORE_KEY, isEnabled)
-  $.ui.toast(isEnabled ? 'Clean View is on: tool details are hidden' : 'Clean View is off: showing everything')
+  $.ui.toast(isEnabled ? 'Glance is on: tool details are hidden' : 'Glance is off: showing everything')
 }
 
 /** The one button: Simple → Details → Off → Simple. */
@@ -745,10 +745,10 @@ const cycleMode = async ($: $, isEnabled: boolean, isDetailed: boolean) => {
   await $.store.set(DETAIL_KEY, nextDetailed ? 'detailed' : 'simple')
   $.ui.toast(
     !nextEnabled
-      ? 'Clean View is off: showing everything'
+      ? 'Glance is off: showing everything'
       : nextDetailed
-        ? 'Clean View details: models, time, tokens, cache and plan usage'
-        : 'Clean View simple: just the steps and progress',
+        ? 'Glance details: models, time, tokens, cache and plan usage'
+        : 'Glance simple: just the steps and progress',
   )
 }
 
@@ -760,7 +760,7 @@ const setDetail = async ($: $, isDetailed: boolean) => {
   )
 }
 
-export function registerCleanView(on: On): void {
+export function registerGlance(on: On): void {
   on('session.start', async ($, e, next) => {
     const stored = await $.store.get(STORE_KEY)
     await update($, enabledAtom, () => stored !== false)
@@ -804,22 +804,24 @@ export function registerCleanView(on: On): void {
       },
     })
     await $.command.register({
-      name: 'simple',
+      name: 'glance',
       description:
-        'Clean View: /simple on|off, details on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
+        'Glance: /glance on|off, details on|off, pause, continue, history [yesterday|YYYY-MM-DD], handoff',
     })
+    // The name Glance had before, kept so old habits still work.
+    await $.command.register({ name: 'simple', description: 'Same as /glance' })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
 
     return next(e)
   })
 
-  on('command.run', { command: 'simple' }, async ($, e) => {
+  on('command.run', { command: ['glance', 'simple'] }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg.startsWith('history')) {
       const day = dayFromArgument(arg.slice('history'.length), await now($))
       if (day === null) {
-        return { text: 'Try /simple history, /simple history yesterday or /simple history 2026-10-06.' }
+        return { text: 'Try /glance history, /glance history yesterday or /glance history 2026-10-06.' }
       }
       const opened = await showHistory($, day, true)
       const entries = (await read($, historyAtom))?.entries ?? []
@@ -855,12 +857,12 @@ export function registerCleanView(on: On): void {
         choice === 'on' ? true : choice === 'off' ? false : (await read($, detailAtom)) !== 'detailed'
       await setDetail($, isDetailed)
 
-      return { text: isDetailed ? 'Clean View details are on.' : 'Clean View details are off.' }
+      return { text: isDetailed ? 'Glance details are on.' : 'Glance details are off.' }
     }
     const isEnabled = arg === 'on' ? true : arg === 'off' ? false : !(await read($, enabledAtom))
     await setEnabled($, isEnabled)
 
-    return { text: isEnabled ? 'Clean View is on.' : 'Clean View is off.' }
+    return { text: isEnabled ? 'Glance is on.' : 'Glance is off.' }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -890,7 +892,7 @@ export function registerCleanView(on: On): void {
     }
     await holdSecretMessage($, e.text, kinds)
 
-    return { drop: 'The message looked like it held a password or key, so Clean View held it back.' }
+    return { drop: 'The message looked like it held a password or key, so Glance held it back.' }
   })
 
   on('session.measure', async ($, e, next) => {
@@ -1024,7 +1026,7 @@ export function registerCleanView(on: On): void {
       }
       const tasks = settle(steps.map((name, index) => task(name, 'upcoming', `plan#${index}`, sizeOf(sizes[index]))))
       const started = await now($)
-      await update($, checklistAtom, (list): CleanViewChecklist => ({
+      await update($, checklistAtom, (list): GlanceChecklist => ({
         planAt: list?.hasPlan ? (list.planAt ?? started) : started,
         plannedCount: list?.hasPlan ? list.plannedCount : steps.length,
         extraTokens: list?.extraTokens ?? 0,
@@ -1253,7 +1255,7 @@ export function registerCleanView(on: On): void {
     if (view === null) {
       return (
         <Box flexDirection="column">
-          <Text dimColor>Type /simple history to see today's tasks.</Text>
+          <Text dimColor>Type /glance history to see today's tasks.</Text>
           {close}
         </Box>
       )
@@ -1316,7 +1318,7 @@ export function registerCleanView(on: On): void {
       )
     }
 
-    const marks: Record<CleanViewHistoryEntry['outcome'], [string, string | undefined]> = {
+    const marks: Record<GlanceHistoryEntry['outcome'], [string, string | undefined]> = {
       done: ['✓', 'green'],
       stopped: ['■', undefined],
       stuck: ['⚠', 'yellow'],
@@ -1347,7 +1349,7 @@ export function registerCleanView(on: On): void {
     const time = finished.reduce((sum, one) => sum + (one.finishedAt! - one.startedAt), 0)
     const newTokens = view.entries.reduce((sum, one) => sum + one.newTokens, 0)
     const cached = view.entries.reduce((sum, one) => sum + one.cachedTokens, 0)
-    const counts = (Object.keys(marks) as CleanViewHistoryEntry['outcome'][])
+    const counts = (Object.keys(marks) as GlanceHistoryEntry['outcome'][])
       .map(outcome => [outcome, view.entries.filter(one => one.outcome === outcome).length] as const)
       .filter(([, count]) => count > 0)
       .map(([outcome, count]) => `${count} ${outcome}`)
@@ -1464,7 +1466,7 @@ export function registerCleanView(on: On): void {
     const button = (
       <Button
         key="toggle"
-        label={!isEnabled ? '○ Clean View: Off' : isDetailed ? '● Clean View: Details' : '● Clean View: Simple'}
+        label={!isEnabled ? '○ Glance: Off' : isDetailed ? '● Glance: Details' : '● Glance: Simple'}
         variant={isEnabled ? 'primary' : 'secondary'}
         onPress={() => cycleMode($, isEnabled, isDetailed)}
       />
@@ -1574,7 +1576,7 @@ export function registerCleanView(on: On): void {
     const firstUpcoming = list.tasks.findIndex(one => one.status === 'upcoming')
     // What is left of the row after mark, name, meter and label: the step's tokens, when they fit.
     const usageRoom = columns - 2 - nameWidth - (METER + 2) - LABEL_WIDTH - 1
-    const usageCell = (one: CleanViewTask) => {
+    const usageCell = (one: GlanceTask) => {
       let timeNote = ''
       if (one.status === 'done' && one.startedAt !== null && one.finishedAt !== null) {
         timeNote = `took ${formatDuration(one.finishedAt - one.startedAt)}`

@@ -1,7 +1,7 @@
 import type { Register } from 'claude-code'
 
-import { registerCleanView } from './clean-view'
+import { registerGlance } from './glance'
 
 export const register: Register = on => {
-  registerCleanView(on)
+  registerGlance(on)
 }

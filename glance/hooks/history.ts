@@ -1,6 +1,6 @@
 // The day's history of jobs, for a retro: pure functions, no engine calls.
 
-import type { CleanViewChecklist, CleanViewHistoryEntry, CleanViewOutcome } from '../types'
+import type { GlanceChecklist, GlanceHistoryEntry, GlanceOutcome } from '../types'
 
 export const HISTORY_PREFIX = 'history:'
 export const HISTORY_DAYS = 30
@@ -24,7 +24,7 @@ export function clockTime(at: number): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-/** The day a /simple history argument names: today, yesterday, or YYYY-MM-DD. Null when it names none. */
+/** The day a /glance history argument names: today, yesterday, or YYYY-MM-DD. Null when it names none. */
 export function dayFromArgument(argument: string, now: number): string | null {
   const word = argument.trim().toLowerCase()
   if (word === '' || word === 'today') return dayKey(now)
@@ -33,7 +33,7 @@ export function dayFromArgument(argument: string, now: number): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(word) ? word : null
 }
 
-const OUTCOME: Record<CleanViewChecklist['phase'], CleanViewOutcome> = {
+const OUTCOME: Record<GlanceChecklist['phase'], GlanceOutcome> = {
   working: 'working',
   needsYou: 'waiting',
   stuck: 'stuck',
@@ -43,7 +43,7 @@ const OUTCOME: Record<CleanViewChecklist['phase'], CleanViewOutcome> = {
 }
 
 /** One job as the history keeps it. */
-export function entryFromChecklist(list: CleanViewChecklist, project: string): CleanViewHistoryEntry {
+export function entryFromChecklist(list: GlanceChecklist, project: string): GlanceHistoryEntry {
   const tokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
   const cached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
 
@@ -65,8 +65,8 @@ export function entryFromChecklist(list: CleanViewChecklist, project: string): C
 }
 
 /** The day's entries with this one added, or replacing its earlier self. */
-export function upsertEntry(entries: unknown, entry: CleanViewHistoryEntry): CleanViewHistoryEntry[] {
-  const list = Array.isArray(entries) ? (entries as CleanViewHistoryEntry[]) : []
+export function upsertEntry(entries: unknown, entry: GlanceHistoryEntry): GlanceHistoryEntry[] {
+  const list = Array.isArray(entries) ? (entries as GlanceHistoryEntry[]) : []
 
   return [...list.filter(one => one.jobId !== entry.jobId), entry].sort((a, b) => a.startedAt - b.startedAt)
 }
@@ -118,9 +118,9 @@ export function plainDuration(ms: number): string {
  * A short daily update for the team, a manager or a CEO: what got done, what is still open, and the time
  * spent. Plain words only: no tokens, models or file names, and quick questions are left out.
  */
-export function teamReport(view: { day: string; project: string; entries: CleanViewHistoryEntry[] }): string {
+export function teamReport(view: { day: string; project: string; entries: GlanceHistoryEntry[] }): string {
   const jobs = view.entries.filter(one => !one.isQuickAnswer)
-  const took = (one: CleanViewHistoryEntry) =>
+  const took = (one: GlanceHistoryEntry) =>
     one.finishedAt === null ? '' : ` (${plainDuration(one.finishedAt - one.startedAt)})`
   const lines = [`Daily update · ${projectName(view.project)} · ${longDay(view.day)}`, '']
 

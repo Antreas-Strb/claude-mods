@@ -1,15 +1,15 @@
-export type CleanViewTaskStatus = 'done' | 'active' | 'upcoming'
+export type GlanceTaskStatus = 'done' | 'active' | 'upcoming'
 
 /** How big a step is: small, medium or large, counting 1, 2 or 3 toward overall progress. */
-export type CleanViewTaskSize = 'S' | 'M' | 'L'
+export type GlanceTaskSize = 'S' | 'M' | 'L'
 
-export type CleanViewTask = {
+export type GlanceTask = {
   id: string
   name: string
-  status: CleanViewTaskStatus
+  status: GlanceTaskStatus
   percent: number
   hasReported: boolean
-  size: CleanViewTaskSize
+  size: GlanceTaskSize
   /** Tokens the model handled for this step: sent, read from the cache, written to it, and written back. */
   tokens: number
   /** Of those, the tokens read from the prompt cache. */
@@ -21,10 +21,10 @@ export type CleanViewTask = {
 }
 
 /** `background`: Claude answered, but helpers or background tasks still run. */
-export type CleanViewPhase = 'working' | 'needsYou' | 'stuck' | 'stopped' | 'background' | 'done'
+export type GlancePhase = 'working' | 'needsYou' | 'stuck' | 'stopped' | 'background' | 'done'
 
 /** A helper working under a step: a subagent, or a background task such as a long command. */
-export type CleanViewHelper = {
+export type GlanceHelper = {
   id: string
   /** The step it was started under. */
   stepId: string
@@ -42,10 +42,10 @@ export type CleanViewHelper = {
   tokens: number
 }
 
-export type CleanViewChecklist = {
+export type GlanceChecklist = {
   title: string
-  phase: CleanViewPhase
-  tasks: CleanViewTask[]
+  phase: GlancePhase
+  tasks: GlanceTask[]
   needsYouReason: string | null
   stuckReason: string | null
   startedAt: number
@@ -60,7 +60,7 @@ export type CleanViewChecklist = {
   /** How many steps the first plan had, to say when the plan grew. */
   plannedCount: number
   /** Subagents and background tasks this job started. */
-  helpers: CleanViewHelper[]
+  helpers: GlanceHelper[]
   /** Tokens of requests outside any step, such as Claude's final answer: counted in the job's total only. */
   extraTokens: number
   /** Of those, the tokens read from the prompt cache. */
@@ -70,7 +70,7 @@ export type CleanViewChecklist = {
 }
 
 /** One plan window and how much of it is used. */
-export type CleanViewLimit = {
+export type GlanceLimit = {
   /** In plain words: "5-hour", "weekly", "spending". */
   label: string
   /** 0 to 100. */
@@ -78,9 +78,9 @@ export type CleanViewLimit = {
 }
 
 /** The plan limits and chat length, shown under the checklist. */
-export type CleanViewUsage = {
+export type GlanceUsage = {
   /** Every plan window the last response reported; empty off a subscription. */
-  limits: CleanViewLimit[]
+  limits: GlanceLimit[]
   /** The fullest plan window, 0 to 100; null off a subscription. */
   limitPercent: number | null
   /** Which window that is, in plain words ("5-hour", "weekly"). */
@@ -90,17 +90,17 @@ export type CleanViewUsage = {
 }
 
 /** How a job ended, as the history shows it. */
-export type CleanViewOutcome = 'done' | 'stopped' | 'stuck' | 'waiting' | 'background' | 'working'
+export type GlanceOutcome = 'done' | 'stopped' | 'stuck' | 'waiting' | 'background' | 'working'
 
 /** One job in the day's history: kept in the store for 30 days, on this computer only. */
-export type CleanViewHistoryEntry = {
+export type GlanceHistoryEntry = {
   jobId: string
   /** The folder the session ran in. */
   project: string
   startedAt: number
   finishedAt: number | null
   title: string
-  outcome: CleanViewOutcome
+  outcome: GlanceOutcome
   stepsDone: number
   stepsTotal: number
   newTokens: number
@@ -114,11 +114,11 @@ export type CleanViewHistoryEntry = {
 }
 
 /** What the history pane shows: one day of one project. */
-export type CleanViewHistoryView = {
+export type GlanceHistoryView = {
   /** YYYY-MM-DD, local time. */
   day: string
   project: string
-  entries: CleanViewHistoryEntry[]
+  entries: GlanceHistoryEntry[]
   /** Days with saved history, newest first, for the day picker. */
   days: string[]
   /** True while the plain-English team report shows in place of the list. */
@@ -127,14 +127,14 @@ export type CleanViewHistoryView = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'clean-view': {
-      cleanViewEnabled: boolean
+    'glance': {
+      glanceEnabled: boolean
       /** `simple`: steps, progress and time. `detailed`: also models, effort, tokens, cache and plan usage. */
       detailLevel: 'simple' | 'detailed'
-      checklist: CleanViewChecklist | null
+      checklist: GlanceChecklist | null
       tick: number
-      usage: CleanViewUsage
-      historyView: CleanViewHistoryView | null
+      usage: GlanceUsage
+      historyView: GlanceHistoryView | null
       /** The Fresh chat button: `armed` waits for a second press to confirm. */
       handoffState: 'idle' | 'armed' | 'working'
     }
