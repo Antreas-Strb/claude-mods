@@ -529,6 +529,27 @@ test('a background task whose name already says background is not labelled twice
   expect(rows.join('\n')).not.toContain('in the background')
 })
 
+test('a background task shows its whole description; "in the background" goes first when the row is short', async ($, on) => {
+  world(on)
+  on('classic.Stop', () => ({}) as never)
+  await $.turn.start({ text: 'Run preflight checks', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Read the scheduled run', 'Report the final status'] })
+  await $.turn.complete({ answer: 'Waiting on the run.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  const description = "Wait until the 10:30 run's logs show the preflight result"
+  await $.classic.Stop({
+    stop_hook_active: false,
+    background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description }],
+  } as never)
+
+  const wide = (await texts($, 'terminal', 120)).join('\n')
+  expect(wide).toContain(description)
+  expect(wide).toContain('in the background')
+
+  const narrow = (await texts($, 'terminal', 64)).join('\n')
+  expect(narrow).toContain(description)
+  expect(narrow).not.toContain('in the background')
+})
+
 const USAGE = { input_tokens: 1000, output_tokens: 1000, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 400 }
 
 test('token counts read short', () => {

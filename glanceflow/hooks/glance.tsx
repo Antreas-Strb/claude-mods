@@ -425,7 +425,7 @@ export function reconcileBackground(list: GlanceChecklist, tasks: readonly Backg
         id: `bg:${one.id}`,
         stepId: currentStepId(list),
         kind: 'background',
-        label: cleanName(one.description),
+        label: cleanName(one.description, MAX_DETAIL),
         type: one.type,
         model: null,
         effort: null,
@@ -1572,7 +1572,7 @@ export function registerGlance(on: On): void {
       await addHelper($, {
         id: started.agentId,
         kind: 'helper',
-        label: cleanName(e.description),
+        label: cleanName(e.description, MAX_DETAIL),
         type: e.subagentType,
         model: prettyModel(started.model),
         effort: null,
@@ -2906,6 +2906,9 @@ export function registerGlance(on: On): void {
           .join(' · ')
         const icon =
           helper.status === 'running' ? (isCalm ? '◐' : SPINNER[tick % SPINNER.length]!) : helper.status === 'failed' ? '✗' : '✓'
+        // The whole row is the description's: "in the background" and the details go first when it is short of room.
+        const room = Math.max(4, columns - 7)
+        const hasRoom = details !== '' && widthOf(helper.label) + 1 + widthOf(details) <= room
         lines.push({
           key: helperKey,
           isActive: helper.status === 'running',
@@ -2915,10 +2918,10 @@ export function registerGlance(on: On): void {
               <Text color={helper.status === 'running' ? 'cyan' : helper.status === 'failed' ? 'red' : 'green'}>
                 {`${icon} `}
               </Text>
-              <Text dimColor={helper.status !== 'running'}>{fit(helper.label, Math.max(4, nameWidth - 4))}</Text>
-              <Text dimColor wrap="truncate-end">
-                {fit(` ${details}`, Math.max(0, columns - nameWidth - 2)).trimEnd()}
+              <Text dimColor={helper.status !== 'running'} wrap="truncate-end">
+                {hasRoom ? helper.label : fit(helper.label, room).trimEnd()}
               </Text>
+              {hasRoom && <Text dimColor wrap="truncate-end">{` ${details}`}</Text>}
             </Box>
           ),
         })
