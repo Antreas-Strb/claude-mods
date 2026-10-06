@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderChildren, RenderSurface, Timer } from 'claude-code'
 
 import type {
+  GlanceFile,
   GlanceChecklist,
   GlanceHelper,
   GlanceHistoryEntry,
@@ -18,8 +19,10 @@ import {
   clockTime,
   dayFromArgument,
   dayKey,
+  entryFiles,
   entryFromChecklist,
   expiredHistoryKeys,
+  filesNote,
   longDay,
   projectName,
   shiftDay,
@@ -265,7 +268,7 @@ export function carryTokens(old: GlanceTask[], next: GlanceTask[]): GlanceTask[]
     const same = old.find(before => before.name === one.name && !used.has(before.id))
     if (!same) return one
     used.add(same.id)
-    return { ...one, tokens: same.tokens, cachedTokens: same.cachedTokens, summary: same.summary }
+    return { ...one, tokens: same.tokens, cachedTokens: same.cachedTokens, summary: same.summary, files: same.files }
   })
   const leftover = old.filter(before => !used.has(before.id))
   const [first, ...rest] = carried
@@ -417,6 +420,17 @@ export function prettyModel(model: string | null | undefined): string | null {
 /** The step new helpers belong to: the current one, or the last one once all are done. */
 function currentStepId(list: GlanceChecklist): string {
   return (list.tasks.find(one => one.status === 'active') ?? list.tasks[list.tasks.length - 1])?.id ?? ''
+}
+
+// The tools that write files, and the field each names the file in.
+const FILE_TOOLS: Record<string, 'file_path' | 'notebook_path'> = { Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path' }
+
+/** A file's path within the project; outside it, just its name. */
+export function projectPath(path: string, project: string): string {
+  const root = project.replace(/[\\/]+$/, '')
+  if (root !== '' && (path.startsWith(`${root}/`) || path.startsWith(`${root}\\`))) return path.slice(root.length + 1)
+
+  return path.split(/[\\/]/).pop() ?? path
 }
 
 export type BackgroundTask = { id: string; type: string; status: string; description: string }
@@ -858,6 +872,20 @@ const setNeedsYou = ($: $, reason: string) =>
   change($, list =>
     list.phase === 'done' || list.phase === 'stopped' ? list : { ...list, phase: 'needsYou', needsYouReason: reason },
   )
+
+/** Claude wrote or edited a file: the current step keeps it, created or changed, once. */
+const noteFile = async ($: $, path: string, isNew: boolean) => {
+  const file: GlanceFile = { path: projectPath(path, await $.session.cwd().catch(() => '')), isNew }
+  await change($, list => {
+    const stepId = currentStepId(list)
+    return {
+      ...list,
+      tasks: list.tasks.map(one =>
+        one.id !== stepId || (one.files ?? []).some(known => known.path === file.path) ? one : { ...one, files: [...(one.files ?? []), file] },
+      ),
+    }
+  })
+}
 
 const setStuck = ($: $, reason: string) =>
   change($, list => ({ ...list, phase: 'stuck', stuckReason: reason, needsYouReason: null }))
@@ -1739,6 +1767,10 @@ export function registerGlance(on: On): void {
     const tool = String(call.tool)
     const isMain = e.agentId === undefined
     noteSign($)
+    const fileField = FILE_TOOLS[tool]
+    const filePath = fileField ? String((e as unknown as Record<string, unknown>)[fileField] ?? '') : ''
+    // Only Write can create a file; asked before it runs.
+    const isNewFile = filePath !== '' && tool === 'Write' && !(await $.fs.exists(filePath).catch(() => true))
 
     if (tool === PLAN_TOOL) {
       const input = e as unknown as { steps?: unknown; sizes?: unknown }
@@ -1802,7 +1834,12 @@ export function registerGlance(on: On): void {
     }
 
     if (!isMain) {
-      return next(e)
+      const ran = await next(e)
+      if (filePath !== '' && ran.deny === undefined && !ran.isError) {
+        await noteFile($, filePath, isNewFile)
+      }
+
+      return ran
     }
 
     const isEnabled = await read($, enabledAtom)
@@ -1864,6 +1901,9 @@ export function registerGlance(on: On): void {
 
     failuresInARow = 0
     await setWorking($)
+    if (filePath !== '') {
+      await noteFile($, filePath, isNewFile)
+    }
 
     if (tool === 'TodoWrite' && call.todos) {
       const todos = call.todos
@@ -2287,6 +2327,7 @@ export function registerGlance(on: On): void {
         done.push(
           row(key, <Text color="green">✓ </Text>, one.name, {}, [took, tokensOf(one)].filter(Boolean).join(' · ')),
           ...(one.summary ? [note(`${key}-summary`, one.summary)] : []),
+          ...(one.files?.length ? [note(`${key}-files`, filesNote(one.files))] : []),
           ...helperRows(one),
         )
       } else if (one.status === 'active') {
@@ -2295,6 +2336,7 @@ export function registerGlance(on: On): void {
         now_.push(
           row(key, <Text color="cyan">▶ </Text>, one.name, { bold: true }, time, false),
           ...(tokensOf(one) ? [note(`${key}-tokens`, `${tokensOf(one)} so far`)] : []),
+          ...(one.files?.length ? [note(`${key}-files`, `${filesNote(one.files)} so far`)] : []),
           // The Plan says more than the band: Claude's own words for what it is doing, and in Details what it runs.
           ...(list.phase === 'working' && list.activity !== null
             ? [
@@ -2483,14 +2525,22 @@ export function registerGlance(on: On): void {
       ]
         .filter(Boolean)
         .join(' · ')
+      const files = filesNote(entryFiles(one))
       return (
-        <Box key={`job-${one.jobId}`} flexDirection="row">
-          <Text dimColor>{`${clockTime(one.startedAt)}  `}</Text>
-          <Text color={color} dimColor={one.outcome === 'stopped'}>{`${mark} `}</Text>
-          <Text bold={one.outcome !== 'stopped'}>{fit(one.title, titleWidth)}</Text>
-          <Text dimColor wrap="truncate-end">
-            {` ${fit(details, Math.max(0, columns - 9 - titleWidth - 1)).trimEnd()}`}
-          </Text>
+        <Box key={`job-${one.jobId}`} flexDirection="column">
+          <Box key="row" flexDirection="row">
+            <Text dimColor>{`${clockTime(one.startedAt)}  `}</Text>
+            <Text color={color} dimColor={one.outcome === 'stopped'}>{`${mark} `}</Text>
+            <Text bold={one.outcome !== 'stopped'}>{fit(one.title, titleWidth)}</Text>
+            <Text dimColor wrap="truncate-end">
+              {` ${fit(details, Math.max(0, columns - 9 - titleWidth - 1)).trimEnd()}`}
+            </Text>
+          </Box>
+          {files !== '' && (
+            <Text key="files" dimColor wrap="wrap">
+              {`         ${files}`}
+            </Text>
+          )}
         </Box>
       )
     })

@@ -1,6 +1,6 @@
 // The day's history of jobs, for a retro: pure functions, no engine calls.
 
-import type { GlanceChecklist, GlanceHistoryEntry, GlanceOutcome, GlanceTaskSize } from '../types'
+import type { GlanceChecklist, GlanceFile, GlanceHistoryEntry, GlanceOutcome, GlanceTaskSize } from '../types'
 
 export const HISTORY_PREFIX = 'history:'
 export const HISTORY_DAYS = 30
@@ -48,7 +48,37 @@ const OUTCOME: Record<GlanceChecklist['phase'], GlanceOutcome> = {
 
 /** One job as the history keeps it. */
 /** One job as the history keeps it; `costUsd` is what it cost, where the host keeps a ledger. */
+/** "Added contact.html · changed styles.css and app.js": file names only, with the folder where two share a name. */
+export function filesNote(files: readonly GlanceFile[], most = 4): string {
+  const base = (path: string) => path.split(/[\\/]/).pop() ?? path
+  const counts = new Map<string, number>()
+  for (const one of files) counts.set(base(one.path), (counts.get(base(one.path)) ?? 0) + 1)
+  const label = (path: string) => ((counts.get(base(path)) ?? 0) > 1 ? path.split(/[\\/]/).slice(-2).join('/') : base(path))
+  const group = (verb: string, names: string[]) => {
+    if (names.length === 0) return null
+    const shown = names.slice(0, most)
+    const more = names.length - shown.length
+    const last = more > 0 ? `${more} more` : shown.pop()
+    return `${verb} ${shown.length > 0 ? `${shown.join(', ')} and ${last}` : last}`
+  }
+  const text = [
+    group('added', files.filter(one => one.isNew).map(one => label(one.path))),
+    group('changed', files.filter(one => !one.isNew).map(one => label(one.path))),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+/** A History entry's files, as a step's are kept. */
+export function entryFiles(entry: GlanceHistoryEntry): GlanceFile[] {
+  return [...(entry.filesAdded ?? []).map(path => ({ path, isNew: true })), ...(entry.filesChanged ?? []).map(path => ({ path, isNew: false }))]
+}
+
 export function entryFromChecklist(list: GlanceChecklist, project: string, costUsd: number | null = null): GlanceHistoryEntry {
+  const files = list.tasks.flatMap(one => one.files ?? [])
+  const added = [...new Set(files.filter(one => one.isNew).map(one => one.path))]
   const tokens = list.tasks.reduce((sum, one) => sum + one.tokens, list.extraTokens)
   const cached = list.tasks.reduce((sum, one) => sum + one.cachedTokens, list.extraCachedTokens)
   const timed = list.hasPlan
@@ -69,6 +99,8 @@ export function entryFromChecklist(list: GlanceChecklist, project: string, costU
     doneSteps: list.hasPlan ? list.tasks.filter(one => one.status === 'done').map(one => one.name) : [],
     doneNotes: list.hasPlan ? list.tasks.filter(one => one.status === 'done').map(one => one.summary ?? '') : [],
     openSteps: list.hasPlan ? list.tasks.filter(one => one.status !== 'done').map(one => one.name) : [],
+    filesAdded: added,
+    filesChanged: [...new Set(files.filter(one => !one.isNew && !added.includes(one.path)).map(one => one.path))],
     isQuickAnswer: !list.hasPlan,
     costUsd,
     doneUnits: timed.reduce((sum, one) => sum + SIZE_WEIGHT[one.size], 0),

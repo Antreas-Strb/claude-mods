@@ -5,7 +5,7 @@ import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
 import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
-import { dayFromArgument, dayKey, expiredHistoryKeys, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
+import { dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
 const PLAN = 'mcp__glanceflow__plan_steps'
 const PROGRESS = 'mcp__glanceflow__report_progress'
@@ -1947,6 +1947,44 @@ test('with Approve the plan first on, a plan Claude makes with its own task list
   expect((await callTool($, { tool: 'Bash', command: 'ls' })).deny).toBeUndefined()
   await callTool($, { tool: 'TodoWrite', todos: [{ content: 'Write the page', status: 'in_progress' }] } as never)
   expect((await callTool($, { tool: 'Bash', command: 'ls' })).deny).toBeUndefined()
+})
+
+test('each step shows the files Claude added or changed, in the Plan and in History', async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  const existing = new Set(['/work/landing-site/styles.css', '/work/landing-site/index.html'])
+  on('fs.exists', (_, e) => ({ value: existing.has((e as { path: string }).path) }) as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Add the contact form', 'Check it'] })
+  await callTool($, { tool: 'Write', file_path: '/work/landing-site/contact.html', content: '<form>' })
+  await callTool($, { tool: 'Edit', file_path: '/work/landing-site/styles.css', old_string: 'a', new_string: 'b' })
+  await callTool($, { tool: 'Edit', file_path: '/work/landing-site/contact.html', old_string: 'a', new_string: 'b' })
+  // A helper's edit counts for the step it works under.
+  await callTool($, { tool: 'Edit', file_path: '/work/landing-site/index.html', old_string: 'a', new_string: 'b', agentId: 'a1' })
+  expect(await planPaneTexts($)).toContain('Added contact.html · changed styles.css and index.html so far')
+
+  await callTool($, { tool: PROGRESS, task: 'Add the contact form', percent: 100, summary: 'Added a contact form' })
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  const plan = await planPaneTexts($)
+  expect(plan).toContain('    Added contact.html · changed styles.css and index.html')
+  expect(plan).not.toContain('so far')
+
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  expect((await paneTexts($)).join('\n')).toContain('Added contact.html · changed styles.css and index.html')
+
+  // Names only; the folder where two share a name, and a long list cut short.
+  expect(
+    filesNote([
+      { path: 'app/page.tsx', isNew: false },
+      { path: 'app/pricing/page.tsx', isNew: false },
+      { path: 'a.css', isNew: false },
+      { path: 'b.css', isNew: false },
+      { path: 'c.css', isNew: false },
+    ]),
+  ).toBe('Changed app/page.tsx, pricing/page.tsx, a.css, b.css and 1 more')
+  expect(filesNote([{ path: 'notes.md', isNew: true }])).toBe('Added notes.md')
+  expect(filesNote([])).toBe('')
 })
 
 const PLAN_PANE = {

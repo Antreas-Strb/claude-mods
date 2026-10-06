@@ -20,7 +20,12 @@ export type GlanceTask = {
   startedAt: number | null
   /** When it was checked off; null until then. */
   finishedAt: number | null
+  /** Files Claude wrote or edited during the step; absent on steps saved before 0.20. */
+  files?: GlanceFile[]
 }
+
+/** A file Claude wrote or edited: its path within the project (just its name outside it), and whether the step created it. */
+export type GlanceFile = { path: string; isNew: boolean }
 
 /** `background`: Claude answered, but helpers or background tasks still run. */
 export type GlancePhase = 'working' | 'needsYou' | 'stuck' | 'stopped' | 'background' | 'done'
@@ -132,6 +137,9 @@ export type GlanceHistoryEntry = {
   doneNotes?: string[]
   /** Names of the steps still open. */
   openSteps: string[]
+  /** Files the job created, and files it changed that were there before, as paths within the project. */
+  filesAdded?: string[]
+  filesChanged?: string[]
   /** A quick answer with no plan: listed in the panel, left out of the team report. */
   isQuickAnswer: boolean
   /** What the job cost in US dollars; absent where the host keeps no ledger. */
