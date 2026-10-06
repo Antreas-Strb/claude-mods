@@ -111,7 +111,7 @@ test('a permission prompt shows Needs you', async ($, on) => {
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).toContain('Needs you')
-    expect(shown).toContain('Claude needs your OK to continue')
+    expect(shown).toContain("Answer Claude's request in the chat")
     expect(shown).toContain('‖')
   }
 })
@@ -419,6 +419,55 @@ test('background work keeps the job open until it finishes', async ($, on) => {
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as never)
   shown = (await texts($, 'terminal')).join('\n')
   expect(shown).toContain('✓ All done')
+})
+
+test('Claude waiting for its own helper is not Needs you; it is when Claude waits for the person', async ($, on) => {
+  world(on)
+  on('agent.spawn', () => ({ model: 'claude-haiku-4-5-20251001', agentId: 'a1' }) as never)
+  await $.turn.start({ text: 'Ship the engine change', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Make the change', 'Get an independent review', 'Report results'] })
+  await callTool($, { tool: PROGRESS, task: 'Make the change', percent: 100 })
+  await $.agent.spawn({
+    tool_use_id: 'tu1', prompt: 'Review it', description: 'Review the change', subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: true, fork: false,
+  } as never)
+  // Claude ends its turn to wait for the review.
+  await $.turn.complete({ answer: 'Waiting for the review.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('Needs you')
+  expect(shown).toContain('Review the change')
+  expect(shown).not.toContain('‖ Pause')
+
+  // The review ends; Claude wakes up on its own and carries on.
+  await $.turn.complete({ answer: 'Looks good.', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer', agentId: 'a1' } as never)
+  await $.turn.start({ text: '<task-notification>Review the change finished</task-notification>', turnId: 't3' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('Needs you')
+  expect(shown).toContain('‖ Pause')
+
+  // Claude stops with steps left and nothing running: now it waits for the person, and says where to answer.
+  await $.turn.complete({ answer: 'Shall I file the follow-ups?', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Needs you')
+  expect(shown).toContain('Claude is waiting: type your reply below')
+})
+
+test('a background shell Claude waits for is not Needs you either', async ($, on) => {
+  world(on)
+  on('classic.Stop', () => ({}) as never)
+  await $.turn.start({ text: 'Run the end-to-end test', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Start the test', 'Read the results', 'Report back'] })
+  await callTool($, { tool: PROGRESS, task: 'Start the test', percent: 100 })
+  await $.turn.complete({ answer: 'Started; waiting.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.classic.Stop({
+    stop_hook_active: false,
+    background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'Run the live test' }],
+  } as never)
+
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('Needs you')
+  expect(shown).toContain('Run the live test')
 })
 
 test('a background task whose name already says background is not labelled twice', async ($, on) => {

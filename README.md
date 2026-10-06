@@ -21,7 +21,7 @@ Build my landing page · 60% · about 4m left               [ ● Glance: Simple
 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and, after two steps, about how long is left.
-- **Status at a glance:** Working, **Needs you** (a permission prompt or a question), Stuck (with the reason in one sentence), Stopped (you pressed Esc), Still working in the background, and All done. All done shrinks to one line after 5 seconds.
+- **Status at a glance:** Working, **Needs you** (a permission prompt, a question, or Claude waiting for your reply, each saying where to answer; never while Claude only waits for its own helpers), Stuck (with the reason in one sentence), Stopped (you pressed Esc), Still working in the background, and All done. All done shrinks to one line after 5 seconds.
 - **Helpers and background work:** subagents and background tasks show under the step that started them. Glance doesn't say All done while they still run.
 - **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when Glance is off.
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.

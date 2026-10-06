@@ -53,9 +53,9 @@ const LIMIT_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: 'w
 
 const DENIED = 'you said no to a step, so Claude paused'
 const FAILING = 'a step keeps failing, Claude is trying another way'
-const PERMISSION = 'Claude needs your OK to continue'
-const QUESTION = 'Claude has a question for you'
-const WAITING = 'Claude is waiting for your reply'
+const PERMISSION = "Answer Claude's request in the chat"
+const QUESTION = "Answer Claude's question in the chat"
+const WAITING = 'Claude is waiting: type your reply below'
 
 const enabledAtom = atom({ plugin: 'glance', key: 'glanceEnabled' } as const, true)
 const detailAtom = atom({ plugin: 'glance', key: 'detailLevel' } as const, 'simple')
@@ -971,7 +971,13 @@ export function registerGlance(on: On): void {
   // At the end of each turn the engine lists what still runs in the background.
   on('classic.Stop', async ($, e, next) => {
     const tasks = (e.background_tasks ?? []).filter(one => one.type !== 'subagent')
-    await change($, current => ({ ...current, helpers: reconcileBackground(current, tasks) }))
+    await change($, current => {
+      const listed = { ...current, helpers: reconcileBackground(current, tasks) }
+      // Background work Claude waits for: it is still working, nothing for the person to do.
+      return listed.phase === 'needsYou' && listed.needsYouReason === WAITING && isBusy(listed)
+        ? { ...listed, phase: 'working', needsYouReason: null }
+        : listed
+    })
     await settleFinished($, await now($), false)
 
     return next(e)
@@ -999,6 +1005,9 @@ export function registerGlance(on: On): void {
       } else {
         await setWorking($)
       }
+    } else if (!text && current !== null) {
+      // Claude woke up on its own (a helper or background task finished): it is working again.
+      await setWorking($)
     }
 
     return next(e)
@@ -1207,7 +1216,8 @@ export function registerGlance(on: On): void {
       } else if (e.reason === 'aborted') {
         await change($, current => ({ ...current, phase: 'stopped', stopKind: 'esc', needsYouReason: null, finishedAt: finished }))
       } else if (list.hasPlan && hasUnfinishedWork(list.tasks)) {
-        await change($, current => ({ ...current, phase: 'needsYou', needsYouReason: WAITING }))
+        // A helper still running means Claude waits for it, not for the person.
+        await change($, current => (isBusy(current) ? current : { ...current, phase: 'needsYou', needsYouReason: WAITING }))
       } else {
         await change($, current => ({
           ...current,
@@ -1395,7 +1405,11 @@ export function registerGlance(on: On): void {
     const warnings: RenderChildren[] = []
     // Last row: open the history, or hand this chat off to a fresh one (a second press confirms).
     const list0 = isEnabled ? await read($, checklistAtom) : null
-    const canPause = list0 !== null && (list0.phase === 'working' || list0.phase === 'needsYou') && list0.needsYouReason !== WAITING
+    const canPause =
+      runningTurn !== undefined &&
+      list0 !== null &&
+      (list0.phase === 'working' || list0.phase === 'needsYou') &&
+      list0.needsYouReason !== WAITING
     const canContinue =
       list0 !== null &&
       (list0.phase === 'stopped' || list0.phase === 'stuck' || (list0.phase === 'needsYou' && list0.needsYouReason === WAITING))
