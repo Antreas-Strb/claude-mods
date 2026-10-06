@@ -742,6 +742,42 @@ test('in details, the current step fills gradually and shows its time; done step
   expect(shown).toContain('1m 0s · ~1m left')
 })
 
+test('a step running past its expected time says it is taking longer, not under a minute left', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => undefined as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  await detailsOn($)
+  await $.turn.start({ text: 'Ship the site', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Merge and ship', 'Check the pages'], sizes: ['L', 'M'] })
+
+  // Claude says 95% after a minute: a large step is expected to take about 4.5 minutes, so that is believable.
+  await clock.advance(60_000)
+  await callTool($, { tool: PROGRESS, task: 'Merge and ship', percent: 95 })
+  expect((await texts($, 'terminal', 120)).join('\n')).toContain('1m 0s · <1m left')
+
+  // 17 minutes later it still sits at 95%: no more "under a minute", and no total that would be a guess.
+  await clock.advance(17 * 60_000)
+  const shown = (await texts($, 'terminal', 120)).join('\n')
+  expect(shown).toContain('18m 0s · taking longer')
+  expect(shown).not.toContain('<1m left')
+  expect(shown).not.toContain('about')
+  const pane = await planPaneTexts($)
+  expect(pane).toContain('taking longer')
+  expect(pane).not.toContain('<1m left')
+  expect(pane).not.toContain('done around')
+  // The next step still says how long it usually takes.
+  expect(pane).toContain('about 3m')
+
+  // A lower report from Claude past that point still gives an honest estimate.
+  await callTool($, { tool: PROGRESS, task: 'Merge and ship', percent: 50 })
+  const later = (await texts($, 'terminal', 120)).join('\n')
+  expect(later).toContain('50%')
+  expect(later).toContain('18m 0s · ~18m left')
+})
+
 test('the simple view keeps the sweep until Claude reports', async ($, on) => {
   world(on)
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })

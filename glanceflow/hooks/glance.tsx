@@ -350,6 +350,10 @@ const PACE_WEIGHT = 2
  * How far along the current step looks: time spent against the time this job's finished steps took per
  * unit of size. It fills gradually, stays below 100 until the step is checked off, and never falls below
  * what Claude reported.
+ *
+ * Time left is null once the step runs past what it should take: the percentage then sits near the top
+ * whatever happens, so time spent against it would keep saying "under a minute". A lower percentage that
+ * Claude reported still gives an estimate.
  */
 export function stepEstimate(list: GlanceChecklist, one: GlanceTask, at: number) {
   const done = list.tasks.filter(
@@ -362,14 +366,26 @@ export function stepEstimate(list: GlanceChecklist, one: GlanceTask, at: number)
   const expected = Math.max(10_000, unitMs * SIZE_WEIGHT[one.size])
   const elapsedMs = one.startedAt === null ? 0 : Math.max(0, at - one.startedAt)
   const estimate = Math.min(95, Math.round((100 * elapsedMs) / expected))
-  const percent = Math.min(99, Math.max(one.hasReported ? one.percent : 0, estimate))
-  const leftMs = percent > 0 ? (elapsedMs * (100 - percent)) / percent : expected
+  const reported = one.hasReported && one.percent > 0 && one.percent < LONG_STEP_REPORT ? one.percent : null
+  // Past its expected time, time spent says nothing more: what Claude reported is the better guess.
+  const percent = elapsedMs > expected && reported !== null ? reported : Math.min(99, Math.max(one.hasReported ? one.percent : 0, estimate))
+  const leftMs =
+    elapsedMs <= expected
+      ? percent > 0
+        ? (elapsedMs * (100 - percent)) / percent
+        : expected
+      : reported === null
+        ? null
+        : (elapsedMs * (100 - reported)) / reported
 
-  return { percent, elapsedMs, leftMs }
+  return { percent, elapsedMs, expectedMs: expected, leftMs }
 }
 
-function leftLabel(ms: number): string {
-  return ms < 60_000 ? '<1m left' : `~${formatLeft(ms)} left`
+// Past its expected time, a step's own report below this still says how far along it is.
+const LONG_STEP_REPORT = 90
+
+function leftLabel(ms: number | null): string {
+  return ms === null ? 'taking longer' : ms < 60_000 ? '<1m left' : `~${formatLeft(ms)} left`
 }
 
 /**
@@ -379,13 +395,16 @@ function leftLabel(ms: number): string {
 export function timeLeft(list: GlanceChecklist, at: number, activePercent?: number): number | null {
   const { doneCount, work } = overallProgress(list.tasks, activePercent)
   if (list.planAt === null || work >= 1) return null
+  // A step running long makes any total a guess: say nothing rather than something too short.
+  const active = list.tasks.find(one => one.status === 'active')
+  if (active && stepEstimate(list, active, at).leftMs === null) return null
   if (doneCount >= 2 && work > 0) return Math.round(((at - list.planAt) / work) * (1 - work))
   if (list.paceMs === null) return null
 
   return Math.round(
     list.tasks
       .filter(one => one.status !== 'done')
-      .reduce((sum, one) => sum + stepEstimate(list, one, at).leftMs, 0),
+      .reduce((sum, one) => sum + (stepEstimate(list, one, at).leftMs ?? 0), 0),
   )
 }
 
@@ -2455,7 +2474,7 @@ export function registerGlance(on: On): void {
           ...helperRows(one),
         )
       } else {
-        const expected = stepEstimate(list, one, at).leftMs
+        const { expectedMs: expected } = stepEstimate(list, one, at)
         next_.push(
           row(key, <Text dimColor>○ </Text>, one.name, { dim: true }, expected < 60_000 ? 'under a minute' : `about ${formatLeft(expected)}`),
           ...helperRows(one),
