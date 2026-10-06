@@ -49,6 +49,13 @@ const CALM_KEY = 'glanceCalm'
 const GUARD_KEY = 'glanceGuard'
 const APPROVE_KEY = 'glanceApprove'
 const NOTICE_KEY = 'glanceNotice'
+const TOUR_KEY = 'glanceTour'
+/** The welcome, three short cards the first time: what the checklist is, what Needs you means, where the rest lives. */
+const TOUR = [
+  'A checklist shows here when you ask Claude for something with a few steps: each step, how far along it is, and about how long is left.',
+  'When Claude needs you, the checklist says Needs you in yellow, and what to do. Turn on sounds or desktop notices in ⚙ Settings to hear or see it from another app.',
+  '⚙ Settings below holds every choice. ☰ History shows your past jobs and Your week. To see this welcome again, type /glanceflow tour.',
+]
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 // Below this width the mode button drops the name; below METER_MIN_COLUMNS the bars go, so step names keep their room.
@@ -93,6 +100,7 @@ const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
 const guardAtom = atom({ plugin: 'glanceflow', key: 'isGuarded' } as const, true)
 const approveAtom = atom({ plugin: 'glanceflow', key: 'approvePlan' } as const, false)
 const noticeAtom = atom({ plugin: 'glanceflow', key: 'isNoticing' } as const, false)
+const tourAtom = atom({ plugin: 'glanceflow', key: 'tourStep' } as const, null)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
 const checkpointAtom = atom({ plugin: 'glanceflow', key: 'checkpointAt' } as const, null)
 const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
@@ -1128,6 +1136,12 @@ const setCalm = async ($: $, isOn: boolean) => {
   syncTicker($, await read($, checklistAtom))
 }
 
+/** Moves the welcome on a card, or ends it for good. */
+const stepTour = async ($: $, step: number | null) => {
+  await update($, tourAtom, () => (step === null || step >= TOUR.length ? null : step))
+  if (step === null || step >= TOUR.length) await $.store.set(TOUR_KEY, true)
+}
+
 /** Desktop notices: on shows one when Claude needs you, gets stuck or finishes a long job. A sample shows at once. */
 const setNotice = async ($: $, isOn: boolean) => {
   await update($, noticeAtom, () => isOn)
@@ -1250,10 +1264,18 @@ const adoptGlanceStore = async ($: $) => {
 
 export function registerGlance(on: On): void {
   on('session.start', async ($, e, next) => {
-    void findPlatform($).then(found => {
-      platform = found
-    })
+    void findPlatform($)
+      .then(found => {
+        platform = found
+      })
+      .catch(() => undefined)
     await adoptGlanceStore($)
+    // The welcome shows once, to someone new: anyone with settings or history already knows their way.
+    const keys = await $.store.keys()
+    if (!keys.includes(TOUR_KEY)) {
+      if (keys.every(key => key === ADOPTED_KEY)) await update($, tourAtom, () => 0)
+      else await $.store.set(TOUR_KEY, true)
+    }
     const stored = await $.store.get(STORE_KEY)
     await update($, enabledAtom, () => stored !== false)
     const detail = await $.store.get(DETAIL_KEY)
@@ -1318,7 +1340,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, week, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, week, tour, pause, continue, plan, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1356,6 +1378,11 @@ export function registerGlance(on: On): void {
           ? 'The password guard is on: a message that looks like it has a password or key in it is held back.'
           : 'The password guard is off: every message is sent as you write it.',
       }
+    }
+    if (arg === 'tour') {
+      await update($, enabledAtom, () => true)
+      await update($, tourAtom, () => 0)
+      return { text: 'The welcome shows above the prompt: press Next to go through it.' }
     }
     if (arg.startsWith('notify')) {
       const choice = arg.slice('notify'.length).trim()
@@ -2544,6 +2571,23 @@ export function registerGlance(on: On): void {
         {button}
       </Box>
     )
+
+    const tourStep = isEnabled && list === null ? await read($, tourAtom) : null
+    if (tourStep !== null) {
+      const isLast = tourStep === TOUR.length - 1
+      return (
+        <Box flexDirection="column" width={columns}>
+          <Text bold wrap="truncate-end">{`Welcome to GlanceFlow · ${tourStep + 1} of ${TOUR.length}`}</Text>
+          <Text wrap="wrap">{TOUR[tourStep]}</Text>
+          <Box key="tour" flexDirection="row" gap={2} marginBottom={1}>
+            <Button key="tour-next" plain label={isLast ? '✓ Got it' : 'Next ▶'} onPress={() => stepTour($, tourStep + 1)} />
+            {!isLast && <Button key="tour-skip" plain label="Skip" onPress={() => stepTour($, null)} />}
+          </Box>
+          {warnings}
+          {actions}
+        </Box>
+      )
+    }
 
     if (list === null) {
       return (

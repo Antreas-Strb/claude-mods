@@ -23,7 +23,7 @@ claude plugin marketplace add Antreas-Strb/glanceflow
 claude plugin install glanceflow@claude-mods
 ```
 
-Then open a new chat.
+Then open a new chat. The first time, three short welcome cards above the prompt show what the checklist is, what **Needs you** means and where Settings and History are. Press **Next ▶** or **Skip**; `/glanceflow tour` shows them again.
 
 **Update:** `claude plugin marketplace update claude-mods`, then `claude plugin update glanceflow@claude-mods`, then open a new chat.
 
@@ -128,6 +128,7 @@ Biggest tasks
 | `/glanceflow history` | Shows today's jobs in this project |
 | `/glanceflow history yesterday`, `/glanceflow history 2026-10-06` | Shows another day |
 | `/glanceflow week` | Your week across every project, in a few lines, copied to share |
+| `/glanceflow tour` | Shows the three welcome cards again |
 | `/glanceflow pause`, `/glanceflow continue` | Pauses Claude, or picks the job up again |
 | `/glanceflow plan` | Opens the whole plan in a side panel |
 | `/glanceflow settings` | Opens the settings: view, sounds, desktop notices, calm mode, plan approval, password guard and when to tidy up |

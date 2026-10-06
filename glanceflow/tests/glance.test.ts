@@ -1730,6 +1730,52 @@ test('the Plan shows long step names whole in a narrow panel', async ($, on) => 
   expect(pane).not.toContain('priva…')
 })
 
+test('someone new gets a three-card welcome once; /glanceflow tour shows it again', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: 1_000_000 })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+
+  const shown = (await texts($, 'terminal', 120)).join('\n')
+  expect(shown).toContain('Welcome to GlanceFlow · 1 of 3')
+  expect(shown).toContain('A checklist shows here when you ask Claude')
+  expect(shown).toContain('☰ History')
+  for (const card of ['2 of 3', '3 of 3']) {
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await band.press({ key: 'tour-next' })
+    await band.unmount()
+    expect((await texts($, 'terminal', 120)).join('\n')).toContain(card)
+  }
+  expect((await texts($, 'terminal', 120)).join('\n')).toContain('✓ Got it')
+  const last = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await last.press({ key: 'tour-next' })
+  await last.unmount()
+  expect((await texts($, 'terminal', 120)).join('\n')).not.toContain('Welcome to GlanceFlow')
+
+  // The next chat does not show it again.
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  expect((await texts($, 'terminal', 120)).join('\n')).not.toContain('Welcome to GlanceFlow')
+
+  await $.command.run({ command: 'glanceflow', args: 'tour' } as never)
+  expect((await texts($, 'terminal', 120)).join('\n')).toContain('Welcome to GlanceFlow · 1 of 3')
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await band.press({ key: 'tour-skip' })
+  await band.unmount()
+  expect((await texts($, 'terminal', 120)).join('\n')).not.toContain('Welcome to GlanceFlow')
+})
+
+test('someone who already uses GlanceFlow is not welcomed again', async ($, on) => {
+  mock.store(on, { glanceSound: 'chime' })
+  mock.clock(on, { now: 1_000_000 })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  expect((await texts($, 'terminal', 120)).join('\n')).not.toContain('Welcome to GlanceFlow')
+})
+
 test('a time Claude writes in UTC shows in the person\'s own time', () => {
   const today = new Date(Date.UTC(2026, 9, 6, 9, 0))
   const local = (hours: number, minutes: number, seconds?: number) => {

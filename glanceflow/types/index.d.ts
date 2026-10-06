@@ -173,6 +173,8 @@ declare module 'claude-code' {
       soundMode: 'off' | 'chime' | 'voice'
       /** Desktop notices: the computer's own notification when Claude needs you, gets stuck or finishes a long job. */
       isNoticing: boolean
+      /** The welcome card in view, 0 to 2; null once it is done or skipped. */
+      tourStep: number | null
       /** Calm mode: nothing moves, and statuses read in bold. */
       isCalm: boolean
       /** Password guard: a message that looks like it holds a password or key is held back until sent twice. */
