@@ -568,6 +568,8 @@ let runningTurn: string | undefined
 let isPausing = false
 // Mirrors the calm setting for the ticker, which runs outside any hook.
 let isCalmMode = false
+/** The computer this runs on, asked when the session starts; null until known, and Claude Code plays the sounds itself. */
+let platform: 'mac' | 'windows' | 'linux' | null = null
 let tickerEvery = 0
 
 const now = ($: $) => $.clock.now()
@@ -590,6 +592,54 @@ const ALERTS: Partial<Record<GlancePhase, { asset: string; words: string }>> = {
   needsYou: { asset: 'sounds/needs-you.wav', words: 'Claude needs you' },
   stuck: { asset: 'sounds/stuck.wav', words: 'Claude is stuck' },
   done: { asset: 'sounds/done.wav', words: 'All done' },
+}
+
+const findPlatform = async ($: $) => {
+  if ((await $.env.get('OS')) === 'Windows_NT') return 'windows' as const
+  const { stdout } = await $.process.run(['uname', '-s']).catch(() => ({ stdout: '' }))
+  const name = stdout.trim()
+
+  return name === 'Darwin' ? ('mac' as const) : name ? ('linux' as const) : null
+}
+
+/** Runs the first of these commands that this computer has; rejects when it has none. */
+const runFirst = async ($: $, commands: readonly (readonly string[])[]) => {
+  for (const argv of commands) {
+    try {
+      const { exitCode } = await $.process.run(argv)
+      if (exitCode === 0) return
+    } catch {
+      // Not installed here: try the next one.
+    }
+  }
+  throw new Error('No sound player on this computer')
+}
+
+/** Plays one of GlanceFlow's sounds: Claude Code's own player on a Mac, the computer's own player on Windows and Linux. */
+const playSound = async ($: $, asset: string) => {
+  if (platform === 'windows') {
+    const file = `${$.plugin.root}\\${asset.replaceAll('/', '\\')}`.replaceAll("'", "''")
+    return runFirst($, [['powershell', '-NoProfile', '-Command', `(New-Object Media.SoundPlayer '${file}').PlaySync()`]])
+  }
+  if (platform !== 'linux') return $.audio.play({ asset })
+  const file = `${$.plugin.root}/${asset}`
+  return runFirst($, [['paplay', file], ['pw-play', file], ['aplay', '-q', file]])
+}
+
+/** Says a few words: the platform's own voice, or on Windows and Linux the speech tools they come with. */
+const sayWords = async ($: $, words: string) => {
+  try {
+    await $.audio.speak(words)
+  } catch (error) {
+    if (platform !== 'windows' && platform !== 'linux') throw error
+    const quoted = words.replaceAll("'", "''")
+    await runFirst(
+      $,
+      platform === 'windows'
+        ? [['powershell', '-NoProfile', '-Command', `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${quoted}')`]]
+        : [['spd-say', '-w', words], ['espeak-ng', words], ['espeak', words]],
+    )
+  }
 }
 
 /** A desktop notice through the computer's own notifications: macOS first, then Linux. The text goes in as arguments, never as script. */
@@ -623,8 +673,8 @@ const alertFor = async ($: $, list: GlanceChecklist) => {
   // A quick answer needs no sound, and a job whose helpers still run is not finished yet.
   if (list.phase === 'done' && (isBusy(list) || (list.finishedAt ?? (await now($))) - list.startedAt < LONG_JOB_MS)) return
   try {
-    await $.audio.play({ asset: alert.asset })
-    if (mode === 'voice') await $.audio.speak(alert.words)
+    await playSound($, alert.asset)
+    if (mode === 'voice') await sayWords($, alert.words)
   } catch {
     // No player or voice on this computer: the band still shows it.
   }
@@ -1056,7 +1106,7 @@ const setEnabled = async ($: $, isEnabled: boolean) => {
 const setSound = async ($: $, mode: 'off' | 'chime' | 'voice') => {
   await update($, soundAtom, () => mode)
   await $.store.set(SOUND_KEY, mode)
-  if (mode !== 'off') void $.audio.play({ asset: 'sounds/needs-you.wav' }).catch(() => undefined)
+  if (mode !== 'off') void playSound($, 'sounds/needs-you.wav').catch(() => undefined)
 }
 
 /** Calm mode: nothing moves, statuses in bold; the band redraws only to keep times current. */
@@ -1108,8 +1158,8 @@ const setView = async ($: $, view: 'simple' | 'detailed' | 'off') => {
 /** Plays what the person picked, so they know what they will hear. */
 const alertSample = async ($: $, mode: 'off' | 'chime' | 'voice') => {
   if (mode === 'off') return
-  await $.audio.play({ asset: 'sounds/needs-you.wav' }).catch(() => undefined)
-  if (mode === 'voice') await $.audio.speak('Claude needs you').catch(() => undefined)
+  await playSound($, 'sounds/needs-you.wav').catch(() => undefined)
+  if (mode === 'voice') await sayWords($, 'Claude needs you').catch(() => undefined)
 }
 
 /** Back to how GlanceFlow starts: Simple, no sounds or notices, calm off, password guard on, no plan approval, tidy up at 50%. */
@@ -1189,6 +1239,9 @@ const adoptGlanceStore = async ($: $) => {
 
 export function registerGlance(on: On): void {
   on('session.start', async ($, e, next) => {
+    void findPlatform($).then(found => {
+      platform = found
+    })
     await adoptGlanceStore($)
     const stored = await $.store.get(STORE_KEY)
     await update($, enabledAtom, () => stored !== false)
@@ -1895,7 +1948,7 @@ export function registerGlance(on: On): void {
     const soundHelp = {
       off: 'No sounds. Turn them on to look away while Claude works.',
       chime: 'A short chime when Claude needs you, gets stuck, or finishes a job that took over a minute.',
-      voice: 'The chime, and a few words like "Claude needs you". macOS only for now.',
+      voice: 'The chime, and a few words like "Claude needs you".',
     }[sound]
     const chatFull = usage.contextPercent === null ? null : Math.round(usage.contextPercent)
     const tidyHelp =

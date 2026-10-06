@@ -1151,7 +1151,7 @@ test("a paused step's time stands still", async ($, on) => {
 
 
 /** A world with a clock to move, and the sounds and words GlanceFlow plays. */
-function soundWorld(on: On) {
+function soundWorld(on: On, canSpeak = true) {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
@@ -1167,6 +1167,7 @@ function soundWorld(on: On) {
     return { value: undefined } as never
   })
   on('audio.speak', (_, e) => {
+    if (!canSpeak) throw new Error('No synthesizer')
     heard.push(`say: ${(e as { text: string }).text}`)
     return { value: { via: 'system' } } as never
   })
@@ -1253,6 +1254,47 @@ test('desktop notices are off until turned on; then the computer says why Claude
   await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
   await clock.advance(1)
   expect(shown).toEqual([])
+})
+
+test('on Linux and Windows the chime and the words play through the computer\'s own player and voice', async ($, on) => {
+  const { clock, heard } = soundWorld(on, false)
+  const world = { system: 'Linux' }
+  const ran: string[] = []
+  on('env.get', (_, e) => ({ value: (e as { name: string }).name === 'OS' && world.system === 'Windows_NT' ? 'Windows_NT' : undefined }) as never)
+  on('process.run', (_, e) => {
+    const argv = (e as { argv: readonly string[] }).argv
+    if (argv[0] === 'uname') return { value: { exitCode: 0, stdout: `${world.system}\n`, stderr: '' } } as never
+    // This Linux has no PulseAudio: the next player is tried.
+    if (argv[0] === 'paplay') throw new Error('paplay: not found')
+    ran.push(argv.join(' '))
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.command.run({ command: 'glanceflow', args: 'sound voice' } as never)
+
+  const alertOn = async (system: string, turnId: string) => {
+    world.system = system
+    await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+    await clock.advance(1)
+    ran.length = 0
+    heard.length = 0
+    await $.turn.start({ text: 'Build my landing page', turnId })
+    await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+    await clock.advance(1)
+  }
+
+  await alertOn('Linux', 't1')
+  expect(heard).toEqual([])
+  expect(ran).toHaveLength(2)
+  expect(ran[0]).toMatch(/^pw-play \/.*\/sounds\/needs-you\.wav$/)
+  expect(ran[1]).toBe('spd-say -w Claude needs you')
+
+  await alertOn('Windows_NT', 't2')
+  expect(heard).toEqual([])
+  expect(ran[0]).toContain("sounds\\needs-you.wav').PlaySync()")
+  expect(ran[1]).toContain(".Speak('Claude needs you')")
 })
 
 test('a finished job with helpers still running chimes only when they finish', async ($, on) => {
