@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On, RenderChildren, RenderSurface, Timer } from 'claude-code'
+import type { EngineInterface, On, RenderChildren, RenderElement, RenderSurface, Timer } from 'claude-code'
 
 import type {
   GlanceFile,
@@ -2717,6 +2717,16 @@ export function registerGlance(on: On): void {
     // Other mods draw in this band too (an approval card, prompt buttons): keep theirs, under ours.
     const beneath = await next(e).catch(() => null)
     const { Box, Text, Button } = $.ui.resolve(e)
+    // What is beneath may be the engine's own node, which can't sit under a Box with a width: wrap, don't nest.
+    const withBeneath = (tree: RenderElement): RenderElement =>
+      beneath ? (
+        <Box flexDirection="column">
+          {tree}
+          {beneath}
+        </Box>
+      ) : (
+        tree
+      )
     const isEnabled = await read($, enabledAtom)
     const list = isEnabled ? await read($, checklistAtom) : null
     const tick = list ? await read($, tickAtom) : 0
@@ -2856,7 +2866,7 @@ export function registerGlance(on: On): void {
     const tourStep = isEnabled && list === null ? await read($, tourAtom) : null
     if (tourStep !== null) {
       const isLast = tourStep === TOUR.length - 1
-      return (
+      return withBeneath(
         <Box flexDirection="column" width={columns}>
           <Text bold wrap="truncate-end">{`Welcome to GlanceFlow · ${tourStep + 1} of ${TOUR.length}`}</Text>
           <Text wrap="wrap">{TOUR[tourStep]}</Text>
@@ -2866,13 +2876,12 @@ export function registerGlance(on: On): void {
           </Box>
           {warnings}
           {actions}
-          {beneath}
         </Box>
       )
     }
 
     if (list === null) {
-      return (
+      return withBeneath(
         <Box flexDirection="column" width={columns}>
           {row(
             isEnabled ? (
@@ -2885,7 +2894,6 @@ export function registerGlance(on: On): void {
           )}
           {warnings}
           {actions}
-          {beneath}
         </Box>
       )
     }
@@ -2965,7 +2973,7 @@ export function registerGlance(on: On): void {
     }
 
     if (list.phase === 'done' && list.isCollapsed) {
-      return (
+      return withBeneath(
         <Box flexDirection="column" width={columns}>
           {row(header)}
           {warnings}
@@ -3234,13 +3242,12 @@ export function registerGlance(on: On): void {
       )
     }
 
-    return (
+    return withBeneath(
       <Box flexDirection="column" width={columns}>
         {row(header)}
         {rows}
         {warnings}
         {actions}
-        {beneath}
       </Box>
     )
   })
