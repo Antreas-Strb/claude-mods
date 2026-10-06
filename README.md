@@ -74,7 +74,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 
 Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Continue** picks the same job up again, with nothing to type. Continue also shows after Esc, when Claude got stuck, or when it is waiting with steps left. The header says **‖ Paused** after Pause and **■ Stopped** after Esc. `/glanceflow pause` and `/glanceflow continue` do the same, and so does typing "continue" (or "συνέχισε") after Esc: the same job picks up, plan and all.
 
-The checklist also survives closing Claude Code: resume the chat (`claude --resume`, or `/resume`) and it comes back as you left it. Work that was under way shows as **‖ Paused**, so **▶ Continue** picks it up; a plan waiting for Start still waits. GlanceFlow keeps the last 20 chats this way.
+The checklist also survives closing Claude Code: resume the chat (`claude --resume`, or reopen it in the Desktop app) and it comes back as you left it. Work that was under way shows as **‖ Paused**, so **▶ Continue** picks it up; a plan waiting for Start still waits. GlanceFlow keeps the last 20 chats this way.
 
 ## The whole plan
 
