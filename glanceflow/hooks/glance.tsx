@@ -5,6 +5,7 @@ import type {
   GlanceChecklist,
   GlanceHelper,
   GlanceHistoryEntry,
+  GlanceHistoryView,
   GlancePhase,
   GlanceTask,
   GlanceTaskSize,
@@ -12,6 +13,7 @@ import type {
 } from '../types'
 import {
   HISTORY_PREFIX,
+  WEEK_DAYS,
   SIZE_WEIGHT,
   clockTime,
   dayFromArgument,
@@ -45,6 +47,7 @@ const SOUND_KEY = 'glanceSound'
 const CALM_KEY = 'glanceCalm'
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
+const MAX_SUMMARY = 100
 const METER = 10
 const LABEL_WIDTH = 7
 const TICK_MS = 250
@@ -89,15 +92,15 @@ The person follows your work on a checklist above the prompt, in plain English.
 - A question you can answer straight away, with no tools, needs no plan: just answer.
 - Before you use any other tool, call plan_steps (tool ${PLAN_TOOL}) with 2 to 8 steps in order. If it is deferred, load it with ToolSearch first. If this session has TodoWrite or TaskCreate you may use that to-do list as the plan instead.
 - Give each step a size in plan_steps' sizes list, in the same order: S (a few minutes), M, or L (the biggest pieces of work).
-- Then call report_progress (tool ${PROGRESS_TOOL}) as real progress happens, and with percent 100 the moment a step finishes.
+- Then call report_progress (tool ${PROGRESS_TOOL}) as real progress happens, and with percent 100 the moment a step finishes. With percent 100, add a summary: one short plain-English sentence on what the step got done, like "Added a pricing table with three plans".
 - Write every step name in plain English a non-technical person understands, under 40 characters, starting with a verb, like "Build the pricing section".
 - Never put file paths, file names, commands, code or tool names in a step name.`
 
 const CODE_FILE =
   /\.(tsx?|jsx?|mjs|cjs|mts|cts|py|rb|go|rs|java|kts?|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|bash|json|ya?ml|toml|css|scss|sass|less|html?|md|mdx|sql|vue|svelte|lock|env|xml|ini|cfg|conf|txt|csv|log)\W*$/i
 
-/** Turns any step or job name into short plain English. */
-export function cleanName(raw: unknown): string {
+/** Turns any step or job name, or a step's summary, into short plain English. */
+export function cleanName(raw: unknown, max = MAX_NAME): string {
   const words = maskPrivate(String(raw ?? ''))
     .replace(/`[^`]*`/g, ' ')
     .replace(/`/g, ' ')
@@ -108,10 +111,10 @@ export function cleanName(raw: unknown): string {
     return 'Working on it'
   }
   name = name.charAt(0).toUpperCase() + name.slice(1)
-  if (name.length <= MAX_NAME) {
+  if (name.length <= max) {
     return name
   }
-  const cut = name.slice(0, MAX_NAME - 1)
+  const cut = name.slice(0, max - 1)
   const space = cut.lastIndexOf(' ')
 
   return `${(space > 0 ? cut.slice(0, space) : cut).replace(/[\s,;:.\-–]+$/, '')}…`
@@ -191,7 +194,7 @@ export function fit(text: string, width: number): string {
 }
 
 function task(name: string, status: GlanceTask['status'], id = name, size: GlanceTaskSize = 'M'): GlanceTask {
-  return { id, name, status, percent: status === 'done' ? 100 : 0, hasReported: status === 'done', size, tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null }
+  return { id, name, status, percent: status === 'done' ? 100 : 0, hasReported: status === 'done', size, summary: null, tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null }
 }
 
 /** Token counts move to the new plan's step of the same name; the rest go to its first step, so the job total holds. */
@@ -201,7 +204,7 @@ export function carryTokens(old: GlanceTask[], next: GlanceTask[]): GlanceTask[]
     const same = old.find(before => before.name === one.name && !used.has(before.id))
     if (!same) return one
     used.add(same.id)
-    return { ...one, tokens: same.tokens, cachedTokens: same.cachedTokens }
+    return { ...one, tokens: same.tokens, cachedTokens: same.cachedTokens, summary: same.summary }
   })
   const leftover = old.filter(before => !used.has(before.id))
   const [first, ...rest] = carried
@@ -674,10 +677,33 @@ const showHistory = async ($: $, day: string, isOpening: boolean) => {
     .filter(key => key.startsWith(HISTORY_PREFIX))
     .map(key => key.slice(HISTORY_PREFIX.length))
   const days = [...new Set([today, day, ...saved])].sort().reverse()
-  await update($, historyAtom, () => ({ day, project, entries, days, isReportShown: false }))
+  const weekEntries: GlanceHistoryEntry[] = []
+  for (let back = WEEK_DAYS - 1; back >= 0; back--) {
+    const one = back === 0 ? stored : await $.store.get(`${HISTORY_PREFIX}${shiftDay(day, -back)}`)
+    if (Array.isArray(one)) weekEntries.push(...(one as GlanceHistoryEntry[]).filter(entry => entry.project === project))
+  }
+  await update($, historyAtom, view => ({
+    day,
+    project,
+    entries,
+    days,
+    isReportShown: false,
+    reportSpan: view?.reportSpan ?? 'day',
+    weekEntries: weekEntries.map(one => ({ ...one, doneSteps: one.doneSteps ?? [], openSteps: one.openSteps ?? [], isQuickAnswer: one.isQuickAnswer ?? false })),
+  }))
 
   return isOpening ? $.ui.open({ id: HISTORY_PANE, title: `History · ${projectName(project)}`, closeOnEscape: true }) : null
 }
+
+/** Switches the team report between the day and the week, and copies the new one. */
+const showReportSpan = async ($: $, span: 'day' | 'week', surface: RenderSurface) => {
+  await update($, historyAtom, view => (view ? { ...view, reportSpan: span } : view))
+  const view = await read($, historyAtom)
+  if (view !== null) await showReport($, true, reportOf(view), surface)
+}
+
+const reportOf = (view: GlanceHistoryView) =>
+  view.reportSpan === 'week' ? teamReport({ ...view, entries: view.weekEntries }, 'week') : teamReport(view)
 
 const showReport = async ($: $, isShown: boolean, text: string, surface: RenderSurface) => {
   await update($, historyAtom, view => (view ? { ...view, isReportShown: isShown } : view))
@@ -994,6 +1020,11 @@ export function registerGlance(on: On): void {
         properties: {
           task: { type: 'string' },
           percent: { type: 'number', minimum: 0, maximum: 100 },
+          summary: {
+            type: 'string',
+            description:
+              'With percent 100: one short plain-English sentence on what the step got done, for the person and their team. No file names or code.',
+          },
         },
         required: ['task', 'percent'],
       },
@@ -1246,7 +1277,7 @@ export function registerGlance(on: On): void {
 
     if (tool === PLAN_TOOL) {
       const input = e as unknown as { steps?: unknown; sizes?: unknown }
-      const steps = (Array.isArray(input.steps) ? input.steps : []).map(cleanName).slice(0, 8)
+      const steps = (Array.isArray(input.steps) ? input.steps : []).map(one => cleanName(one)).slice(0, 8)
       const sizes = Array.isArray(input.sizes) ? input.sizes : []
       if (steps.length === 0) {
         return { deny: 'plan_steps needs 2 to 8 step names.' }
@@ -1282,11 +1313,15 @@ export function registerGlance(on: On): void {
     }
 
     if (tool === PROGRESS_TOOL) {
-      const input = e as unknown as { task?: unknown; percent?: unknown }
+      const input = e as unknown as { task?: unknown; percent?: unknown; summary?: unknown }
       const percent = Math.min(100, Math.max(0, Math.round(Number(input.percent) || 0)))
+      const name = cleanName(String(input.task ?? ''))
+      const summary = percent === 100 && String(input.summary ?? '').trim() ? cleanName(input.summary, MAX_SUMMARY) : null
       await change($, list => ({
         ...list,
-        tasks: applyProgress(list.tasks, String(input.task ?? ''), percent),
+        tasks: applyProgress(list.tasks, name, percent).map(one =>
+          summary !== null && one.name.toLowerCase() === name.toLowerCase() ? { ...one, summary } : one,
+        ),
         activity: percent === 100 ? null : list.activity,
       }))
 
@@ -1539,7 +1574,7 @@ export function registerGlance(on: On): void {
       </Box>
     )
 
-    const report = teamReport(view)
+    const report = reportOf(view)
     if (view.isReportShown) {
       return (
         <Box flexDirection="column" width={columns}>
@@ -1551,6 +1586,11 @@ export function registerGlance(on: On): void {
           ))}
           <Box key="report-actions" flexDirection="row" gap={1} marginTop={1}>
             <Button key="copy" variant="primary" label="Copy report" onPress={() => showReport($, true, report, e.surface)} />
+            {view.reportSpan === 'week' ? (
+              <Button key="span" label="This day" onPress={() => showReportSpan($, 'day', e.surface)} />
+            ) : (
+              <Button key="span" label="This week" onPress={() => showReportSpan($, 'week', e.surface)} />
+            )}
             <Button key="back" label="Back to the list" onPress={() => showReport($, false, report, e.surface)} />
             {close}
           </Box>
@@ -1867,6 +1907,12 @@ export function registerGlance(on: On): void {
         .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running'))
         .slice(0, HELPERS_PER_STEP)
 
+    // What the step that just finished got done, until Claude's next activity takes the line.
+    const justDone = list.tasks
+      .filter(one => one.status === 'done' && one.finishedAt !== null)
+      .sort((a, b) => b.finishedAt! - a.finishedAt!)[0]
+    const showsSummary = (list.phase === 'working' || list.phase === 'done') && list.activity === null && Boolean(justDone?.summary)
+
     // Every line: each step, then the helpers working under it.
     const lines: { key: string; isActive: boolean; element: RenderChildren }[] = []
     list.tasks.forEach((one, index) => {
@@ -1885,6 +1931,19 @@ export function registerGlance(on: On): void {
             </Box>
           ),
         })
+        if (showsSummary && one === justDone) {
+          lines.push({
+            key: 'summary',
+            isActive: false,
+            element: (
+              <Box key="summary" flexDirection="row">
+                <Text dimColor wrap="truncate-end">
+                  {fit(`    ${one.summary}`, Math.max(0, columns - 1)).trimEnd()}
+                </Text>
+              </Box>
+            ),
+          })
+        }
       } else if (one.status === 'active') {
         // The details view fills the bar gradually from the time estimate; the simple view sweeps until Claude reports.
         const shownPercent = isDetailed ? stepEstimate(list, one, stepClock).percent : one.percent

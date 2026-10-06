@@ -67,6 +67,7 @@ export function entryFromChecklist(list: GlanceChecklist, project: string, costU
     newTokens: tokens - cached,
     cachedTokens: cached,
     doneSteps: list.hasPlan ? list.tasks.filter(one => one.status === 'done').map(one => one.name) : [],
+    doneNotes: list.hasPlan ? list.tasks.filter(one => one.status === 'done').map(one => one.summary ?? '') : [],
     openSteps: list.hasPlan ? list.tasks.filter(one => one.status !== 'done').map(one => one.name) : [],
     isQuickAnswer: !list.hasPlan,
     costUsd,
@@ -116,6 +117,19 @@ export function shiftDay(day: string, by: number): string {
 }
 
 /** "Tuesday 6 October 2026", or the YYYY-MM-DD day where the runtime has no date names. */
+/** The days the weekly report covers: the day picked and the 6 before it. */
+export const WEEK_DAYS = 7
+
+/** YYYY-MM-DD as "30 Sep 2026". */
+export function shortDay(day: string): string {
+  const [year, month, date] = day.split('-').map(Number)
+  try {
+    return new Date(year!, month! - 1, date!, 12).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  } catch {
+    return day
+  }
+}
+
 export function longDay(day: string): string {
   const [year, month, date] = day.split('-').map(Number)
   try {
@@ -143,14 +157,21 @@ export function plainDuration(ms: number): string {
  * A short daily update for the team, a manager or a CEO: what got done, what is still open, and the time
  * spent. Plain words only: no tokens, models or file names, and quick questions are left out.
  */
-export function teamReport(view: { day: string; project: string; entries: GlanceHistoryEntry[] }): string {
+export function teamReport(
+  view: { day: string; project: string; entries: GlanceHistoryEntry[] },
+  span: 'day' | 'week' = 'day',
+): string {
   const jobs = view.entries.filter(one => !one.isQuickAnswer)
   const took = (one: GlanceHistoryEntry) =>
     one.finishedAt === null ? '' : ` (${plainDuration(one.finishedAt - one.startedAt)})`
-  const lines = [`Daily update · ${projectName(view.project)} · ${longDay(view.day)}`, '']
+  const heading =
+    span === 'week'
+      ? `Weekly update · ${projectName(view.project)} · ${shortDay(shiftDay(view.day, -(WEEK_DAYS - 1)))} to ${shortDay(view.day)}`
+      : `Daily update · ${projectName(view.project)} · ${longDay(view.day)}`
+  const lines = [heading, '']
 
   if (jobs.length === 0) {
-    return [...lines, 'No planned work was recorded on this day.'].join('\n')
+    return [...lines, `No planned work was recorded ${span === 'week' ? 'this week' : 'on this day'}.`].join('\n')
   }
 
   const done = jobs.filter(one => one.outcome === 'done')
@@ -161,7 +182,13 @@ export function teamReport(view: { day: string; project: string; entries: Glance
     lines.push('Done')
     for (const one of done) {
       lines.push(`• ${one.title}${took(one)}`)
-      if (one.doneSteps.length > 1) lines.push(`  ${one.doneSteps.join(' · ')}`)
+      const notes = one.doneNotes ?? []
+      if (notes.some(Boolean)) {
+        // What each step got done, in Claude's words where it gave them.
+        one.doneSteps.forEach((name, at) => lines.push(`  ✓ ${notes[at] || name}`))
+      } else if (one.doneSteps.length > 1) {
+        lines.push(`  ${one.doneSteps.join(' · ')}`)
+      }
     }
     lines.push('')
   }

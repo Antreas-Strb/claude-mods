@@ -53,6 +53,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A long plan says how many steps are out of view.
 - **What Claude is doing right now:** a quiet line under the current step says it in plain words, like `Reading files (3)…` or `Running the tests…`. No file names or commands.
+- **What each step got done:** when a step is checked off, Claude adds one plain-English line on what it did ("Added a pricing table with three plans"). It shows under the step until Claude moves on, and goes into the History and the Team report.
 - **Sounds, if you want them:** `/glanceflow sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glanceflow sound voice` also says it ("Claude needs you"). Off by default; macOS only for now.
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
 - **Status at a glance:** every status says what is happening and, when Claude needs you, where to answer. Claude waiting for its own helpers is never **Needs you**.
@@ -77,7 +78,7 @@ Under the checklist, **‖ Pause** stops Claude while it works, and **▶ Contin
 
 In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** move between days (or type `/glanceflow history yesterday`, `/glanceflow history 2026-10-06`). The history stays on this computer and keeps 30 days.
 
-**Team report** turns the day into a short update in plain words for the team, a manager or a CEO, and copies it to paste into Slack, Teams or an email: what got done, what is still in progress and what is next, what needs a decision, and the time spent. No tokens, models or file names, and quick questions are left out.
+**Team report** turns the day into a short update in plain words for the team, a manager or a CEO, and copies it to paste into Slack, Teams or an email: what got done (step by step, in Claude's words), what is still in progress and what is next, what needs a decision, and the time spent. **This week** switches it to the 7 days up to the day picked, for a weekly update or a retro. No tokens, models or file names, and quick questions are left out.
 
 ![The Team report: what got done, what is still in progress, what needs a decision, and the time spent](docs/glance-team-report.png)
 

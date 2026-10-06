@@ -10,6 +10,8 @@ export type GlanceTask = {
   percent: number
   hasReported: boolean
   size: GlanceTaskSize
+  /** What the step got done, in one plain-English line, as Claude said when it checked it off; null until then. */
+  summary: string | null
   /** Tokens the model handled for this step: sent, read from the cache, written to it, and written back. */
   tokens: number
   /** Of those, the tokens read from the prompt cache. */
@@ -115,6 +117,8 @@ export type GlanceHistoryEntry = {
   cachedTokens: number
   /** Names of the steps it finished, for the team report. */
   doneSteps: string[]
+  /** What each finished step got done, in the order of `doneSteps`; '' where Claude gave no summary. */
+  doneNotes?: string[]
   /** Names of the steps still open. */
   openSteps: string[]
   /** A quick answer with no plan: listed in the panel, left out of the team report. */
@@ -136,6 +140,10 @@ export type GlanceHistoryView = {
   days: string[]
   /** True while the plain-English team report shows in place of the list. */
   isReportShown: boolean
+  /** Whether the team report covers the day or the 7 days up to it. */
+  reportSpan: 'day' | 'week'
+  /** This project's entries for the 7 days up to `day`, for the weekly report. */
+  weekEntries: GlanceHistoryEntry[]
 }
 
 declare module 'claude-code' {

@@ -500,11 +500,11 @@ test('token counts read short', () => {
 
 test('a new plan keeps the tokens already counted', () => {
   const old = [
-    { id: 'a', name: 'Understand your request', status: 'active', percent: 0, hasReported: false, size: 'M', tokens: 500, cachedTokens: 100, startedAt: null, finishedAt: null },
+    { id: 'a', name: 'Understand your request', status: 'active', percent: 0, hasReported: false, size: 'M', summary: null, tokens: 500, cachedTokens: 100, startedAt: null, finishedAt: null },
   ] as const
   const next = [
-    { id: 'p0', name: 'Write the page', status: 'active', percent: 0, hasReported: false, size: 'M', tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null },
-    { id: 'p1', name: 'Check it', status: 'upcoming', percent: 0, hasReported: false, size: 'M', tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null },
+    { id: 'p0', name: 'Write the page', status: 'active', percent: 0, hasReported: false, size: 'M', summary: null, tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null },
+    { id: 'p1', name: 'Check it', status: 'upcoming', percent: 0, hasReported: false, size: 'M', summary: null, tokens: 0, cachedTokens: 0, startedAt: null, finishedAt: null },
   ] as const
   const carried = carryTokens([...old], [...next])
   expect(carried[0]?.tokens).toBe(500)
@@ -1411,4 +1411,78 @@ test('a finished job keeps the size and time of its steps, so the next job learn
   const saved = [...store.entries()].find(([key]) => key.startsWith('history:'))?.[1] as { doneUnits: number; doneMs: number }[]
   expect(saved[0]?.doneUnits).toBe(5)
   expect(saved[0]?.doneMs).toBe(5 * 60_000)
+})
+
+test("a finished step's summary shows under it until Claude moves on, and code stays out of it", async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Add pricing', 'Check it'] })
+  await callTool($, {
+    tool: PROGRESS,
+    task: 'Add pricing',
+    percent: 100,
+    summary: 'Added a pricing table with three plans in `src/Pricing.tsx`',
+  })
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('    Added a pricing table with three plans in')
+  expect(shown).not.toContain('Pricing.tsx')
+
+  await callTool($, { tool: 'Read', file_path: '/work/a.md' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Reading files…')
+  expect(shown).not.toContain('Added a pricing table')
+})
+
+test("the team report says what each step got done, in Claude's words where it gave them", () => {
+  const report = teamReport({
+    day: '2026-10-06',
+    project: '/work/landing-site',
+    entries: [
+      { ...ENTRY, jobId: 'a', startedAt: 0, finishedAt: 12 * 60_000, title: 'Build the pricing section', outcome: 'done', stepsDone: 2, stepsTotal: 2, doneSteps: ['Write it', 'Check it'], doneNotes: ['Added three plans with monthly and yearly prices', ''], openSteps: [] },
+    ],
+  })
+  expect(report).toContain('  ✓ Added three plans with monthly and yearly prices\n  ✓ Check it')
+})
+
+test('the weekly team report covers the 7 days up to the day picked, and This week switches to it', async ($, on) => {
+  mock.clock(on, { now: new Date(2026, 9, 6, 18, 0).getTime() })
+  const job = (jobId: string, day: number, title: string) => ({
+    ...ENTRY,
+    jobId,
+    startedAt: new Date(2026, 9, day, 9, 0).getTime(),
+    finishedAt: new Date(2026, 9, day, 9, 30).getTime(),
+    title,
+    outcome: 'done',
+    stepsDone: 1,
+    stepsTotal: 1,
+    doneSteps: [title],
+    openSteps: [],
+  })
+  mock.store(on, {
+    'history:2026-10-06': [job('a', 6, 'Build the pricing section')],
+    'history:2026-10-02': [job('b', 2, 'Fix the contact form')],
+    'history:2026-09-29': [job('c', 29 - 30, 'Too old for this week')],
+  })
+  let copied = ''
+  on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.toast', () => undefined as never)
+  on('ui.copy', (_, e) => {
+    copied = e.text
+    return { value: { isCopied: true } } as never
+  })
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'report' })
+  await ui.unmount()
+  const report = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await report.press({ key: 'span' })
+  await report.unmount()
+  expect(copied).toMatch(/Weekly update · landing-site · 30 Sept? 2026 to 6 Oct 2026/)
+  expect(copied).toContain('• Build the pricing section (30 min)')
+  expect(copied).toContain('• Fix the contact form (30 min)')
+  expect(copied).not.toContain('Too old')
+  expect(copied).toContain('2 of 2 tasks finished · 1 h of work')
+  expect((await paneTexts($)).join('\n')).toContain('This day')
 })
