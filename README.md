@@ -152,6 +152,7 @@ The button above the prompt cycles Simple, Details and Off.
 ## Limits
 
 - The Desktop app draws its own one-line tool summary ("Used 3 tools"); a mod can't hide it.
+- The VS Code extension doesn't draw mods yet ([anthropics/claude-code#99423](https://github.com/anthropics/claude-code/issues/99423)), so GlanceFlow shows nothing there. Run `claude` in VS Code's own terminal instead, or use the Desktop app's Code tab.
 - Pattern matching can't catch every secret written in plain words.
 - Background tasks are checked at the end of each of Claude's replies.
 - Each new job gets a short English name from Haiku in the background: one small model request per job.
