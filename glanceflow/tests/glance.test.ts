@@ -1318,6 +1318,36 @@ test('on Linux and Windows the chime and the words play through the computer\'s 
   expect(ran[1]).toContain(".Speak('Claude needs you')")
 })
 
+test('on Windows the desktop notice is a Windows toast, with the words passed as variables, not as script', async ($, on) => {
+  const { clock } = soundWorld(on)
+  const ran: { argv: readonly string[]; env?: Record<string, string> }[] = []
+  on('env.get', (_, e) => ({ value: (e as { name: string }).name === 'OS' ? 'Windows_NT' : undefined }) as never)
+  on('process.run', (_, e) => {
+    const { argv, init } = e as { argv: readonly string[]; init?: { env?: Record<string, string> } }
+    ran.push({ argv, env: init?.env })
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  await clock.advance(1)
+  await $.command.run({ command: 'glanceflow', args: 'notify on' } as never)
+  await clock.advance(1)
+  ran.length = 0
+
+  await $.turn.start({ text: "Fix Ana's 'pricing' page", turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Fix it', 'Check it'] })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  await clock.advance(1)
+  const toast = ran.find(one => one.argv[0] === 'powershell')
+  expect(toast?.argv.at(-1)).toContain('ToastNotificationManager')
+  expect(toast?.argv.at(-1)).not.toContain('pricing')
+  expect(toast?.env?.GLANCEFLOW_TITLE).toBe('Claude needs you')
+  expect(toast?.env?.GLANCEFLOW_BODY).not.toBe('')
+  expect(ran.some(one => one.argv[0] === 'osascript' || one.argv[0] === 'notify-send')).toBe(false)
+})
+
 test('a finished job with helpers still running chimes only when they finish', async ($, on) => {
   const { clock, heard } = soundWorld(on)
   await $.command.run({ command: 'glanceflow', args: 'sound on' } as never)

@@ -661,8 +661,24 @@ const sayWords = async ($: $, words: string) => {
   }
 }
 
-/** A desktop notice through the computer's own notifications: macOS first, then Linux. The text goes in as arguments, never as script. */
+/** Windows' own toast, shown as Windows PowerShell's; the text comes in through the environment, never as script. */
+const WINDOWS_TOAST = [
+  '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null',
+  '$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)',
+  "$text = $xml.GetElementsByTagName('text')",
+  '$text.Item(0).AppendChild($xml.CreateTextNode($env:GLANCEFLOW_TITLE)) | Out-Null',
+  '$text.Item(1).AppendChild($xml.CreateTextNode($env:GLANCEFLOW_BODY)) | Out-Null',
+  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($xml))",
+].join('; ')
+
+/** A desktop notice through the computer's own notifications: Windows, macOS or Linux. The text goes in as arguments or variables, never as script. */
 const showNotice = async ($: $, title: string, body: string) => {
+  if (platform === 'windows') {
+    await $.process
+      .run(['powershell', '-NoProfile', '-Command', WINDOWS_TOAST], { env: { GLANCEFLOW_TITLE: title, GLANCEFLOW_BODY: body } })
+      .catch(() => undefined)
+    return
+  }
   const script = ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run']
   try {
     await $.process.run(['osascript', ...script, title, body])
@@ -2027,7 +2043,7 @@ export function registerGlance(on: On): void {
           choice('notice', [['off', 'Off'], ['on', 'On']], isNoticing ? 'on' : 'off', value => setNotice($, value === 'on')),
           isNoticing
             ? 'A notice on your computer when Claude needs you, gets stuck, or finishes a job that took over a minute.'
-            : 'Turn on to get a notice on your computer, even while you work in another app. Mac and Linux.',
+            : 'Turn on to get a notice on your computer, even while you work in another app.',
         )}
         {group(
           'calm',
