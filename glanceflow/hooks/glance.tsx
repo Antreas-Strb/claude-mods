@@ -32,7 +32,7 @@ import {
   upsertEntry,
 } from './history'
 import { findSecrets, maskPrivate } from './privacy'
-import { GLYPH, TONE, TONE_TEXT, badgeSvg, blankSvg, dotsSvg, iconSvg, meterSvg, openRingSvg, ringSvg } from './look'
+import { GLYPH, TONE_TEXT, badgeSvg, blankSvg, dotsSvg, iconSvg, meterSvg, openRingSvg, ringSvg } from './look'
 import type { IconName, Tone } from './look'
 
 const PLUGIN = 'glanceflow'
@@ -56,11 +56,13 @@ const APPROVE_KEY = 'glanceApprove'
 const NOTICE_KEY = 'glanceNotice'
 const TOUR_KEY = 'glanceTour'
 /** The welcome, three short cards the first time: what the checklist is, what Needs you means, where the rest lives. */
-const TOUR = [
-  'A checklist shows here when you ask Claude for something with a few steps: each step, how far along it is, and about how long is left.',
-  'When Claude needs you, the checklist says Needs you in yellow, and what to do. Turn on sounds or desktop notices in Settings to hear or see it from another app.',
-  'Settings, below, holds every choice. History shows your past jobs and Your week. To see this welcome again, type /glanceflow tour.',
-]
+const TOUR_FIRST = 'A checklist shows here when you ask Claude for something with a few steps: each step, how far along it is, and about how long is left.'
+const tourNeeds = (mark: string) =>
+  `When Claude needs you, the checklist says Needs you ${mark}, and what to do. Turn on sounds or desktop notices in Settings to hear or see it from another app.`
+const TOUR_LAST = 'Settings, below, holds every choice. History shows your past jobs and Your week. To see this welcome again, type /glanceflow tour.'
+const TOUR = [TOUR_FIRST, tourNeeds('in yellow'), TOUR_LAST]
+/** Elsewhere than the terminal the words keep the text colour and the yellow is the bell beside them. */
+const TOUR_VECTOR = [TOUR_FIRST, tourNeeds('beside a yellow bell'), TOUR_LAST]
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
 // Below this width the mode button drops the name; below METER_MIN_COLUMNS the bars go, so step names keep their room.
@@ -446,6 +448,31 @@ export function headerDetails(parts: string[], room: number): string {
   }
 
   return kept.map(one => ` · ${one}`).join('')
+}
+
+/**
+ * The pieces of a line that fit in `room` characters, joined by " · ": whole pieces, in order, leaving out any that
+ * don't fit, so no word is ever cut in half. When none fits, the first keeps the whole words it has room for.
+ */
+export function wholePieces(pieces: string[], room: number): string {
+  const all = pieces.filter(Boolean)
+  const kept: string[] = []
+  let used = 0
+  for (const piece of all) {
+    const size = widthOf(piece) + (kept.length > 0 ? 3 : 0)
+    if (used + size <= room) {
+      kept.push(piece)
+      used += size
+    }
+  }
+  if (kept.length > 0 || all.length === 0) return kept.join(' · ')
+  let cut = ''
+  for (const word of (all[0] ?? '').split(' ')) {
+    const next = cut === '' ? word : `${cut} ${word}`
+    if (widthOf(`${next}…`) > room) break
+    cut = next
+  }
+  return cut === '' ? '' : `${cut.replace(/[\s·,;:]+$/, '')}…`
 }
 
 const SPINNER = ['◐', '◓', '◑', '◒']
@@ -1085,7 +1112,7 @@ const showHistory = async ($: $, day: string, isOpening: boolean) => {
     if (Array.isArray(one)) myWeek.push(...(one as GlanceHistoryEntry[]))
   }
   const filled = (one: GlanceHistoryEntry) => ({ ...one, doneSteps: one.doneSteps ?? [], openSteps: one.openSteps ?? [], isQuickAnswer: one.isQuickAnswer ?? false })
-  await update($, historyAtom, view => ({
+  await update($, historyAtom, (view): GlanceHistoryView => ({
     day,
     project,
     entries,
@@ -3135,9 +3162,9 @@ export function registerGlance(on: On): void {
     const vector = kit.isVector
     const isEnabled = await read($, enabledAtom)
     const list = isEnabled ? await read($, checklistAtom) : null
-    // Another mod's buttons (Replay, say) sit with GlanceFlow's own actions at the bottom right, where the job's
-    // checklist has that row; anything else it draws stays under the band.
-    const lifted = vector && list !== null ? liftButtons(beneath) : { buttons: [], rest: beneath }
+    // Another mod's buttons (Replay, say) sit with GlanceFlow's own actions at the bottom right, in every state of the
+    // band; anything else it draws stays under it.
+    const lifted = vector && isEnabled ? liftButtons(beneath) : { buttons: [], rest: beneath }
     const kept = lifted.rest as RenderElement | null
     // What is beneath may be the engine's own node, which can't sit under a Box with a width: wrap, don't nest.
     const withBeneath = (tree: RenderElement): RenderElement =>
@@ -3179,9 +3206,12 @@ export function registerGlance(on: On): void {
       (list0.phase === 'working' || list0.phase === 'needsYou') &&
       list0.needsYouReason !== WAITING &&
       list0.approval !== 'waiting'
+    // Claude asked something: elsewhere than the terminal Continue would read as a yes, so only an answer moves on.
     const canContinue =
       list0 !== null &&
-      (list0.phase === 'stopped' || list0.phase === 'stuck' || (list0.phase === 'needsYou' && list0.needsYouReason === WAITING))
+      (list0.phase === 'stopped' ||
+        list0.phase === 'stuck' ||
+        (list0.phase === 'needsYou' && list0.needsYouReason === WAITING && !(vector && list0.question)))
     // An action: on the terminal its glyph leads the label. Elsewhere it is the app's own button, so it reads as one
     // at a glance; the one that matters now (Continue, Start) is the primary one.
     const action = (key: string, icon: IconName, label: string, onPress: () => unknown, short?: string, isMain = false) =>
@@ -3197,8 +3227,9 @@ export function registerGlance(on: On): void {
     // button stays quiet.
     const isStuck = list0?.phase === 'stuck'
     const pauseLabel = 'Pause'
-    const continueLabel = vector && isStuck ? 'Try again' : 'Continue'
     const isLimitStuck = isStuck && /limit/i.test(list0?.stuckReason ?? '')
+    // Beside "try again later" a usage limit's button checks whether it has lifted.
+    const continueLabel = vector && isStuck ? (isLimitStuck ? 'Check again' : 'Try again') : 'Continue'
     const controls = isEnabled
       ? [
           canPause && action('pause', 'pause', pauseLabel, () => pauseJob($)),
@@ -3210,9 +3241,10 @@ export function registerGlance(on: On): void {
     const isChatFull = usage.contextPercent !== null && tidyAt > 0 && usage.contextPercent >= tidyAt
     // A fresh chat ends this one. Elsewhere than the terminal it stands apart from the places to go, and only once the
     // job has stopped or finished (mid-job, Tidy up now is the way to make room), or while a first press waits.
+    // While a stopped job's chat is full, Tidy up now is the one way offered to make room.
     const handoffItem =
       list0 !== null &&
-      (!vector || list0.phase === 'done' || list0.phase === 'stopped' || handoff !== 'idle') &&
+      (!vector || list0.phase === 'done' || (list0.phase === 'stopped' && !isChatFull) || handoff !== 'idle') &&
       action('handoff', 'fresh', handoffLabel, () => pressHandoff($), handoff === 'idle' && columns < 40 ? '↻ Fresh' : undefined)
     // Where to go from here: the plan, the history, the settings.
     const places = isEnabled
@@ -3240,9 +3272,9 @@ export function registerGlance(on: On): void {
       // tidy-up mark, whose button sits with the other actions. The icon carries the colour, as the app's own notices do.
       if (usageParts.length > 0 && (isDetailed || isHigh || isChatFull)) {
         const words = isHigh
-          ? [`You've used ${Math.round(top)}% of your ${usage.limitLabel ?? 'plan'} limit${reset === null ? '' : ` · resets ${reset}`}`, isChatFull ? chatPart : '']
+          ? [`You've used ${Math.round(top)}% of your ${usage.limitLabel ?? 'plan'} limit`, reset === null ? '' : `resets ${reset}`, isChatFull ? chatPart : '']
           : isDetailed
-            ? [`Usage: ${usageParts.join(' · ')}`]
+            ? [`Usage: ${usageParts[0] ?? ''}`, ...usageParts.slice(1)]
             : [`This ${chatPart.replace(/^chat/, 'chat is')}`, 'tidying up keeps a checkpoint first']
         warnings.push(
           line(
@@ -3252,8 +3284,9 @@ export function registerGlance(on: On): void {
               : isChatFull
                 ? kit.icon('tidy', 'warn', 'Chat getting full')
                 : kit.icon('clock', 'quiet', 'Usage'),
+            // Whole pieces, as in the header: about 0.8 of a cell a character, less the mark.
             <Text wrap="truncate-end" dimColor={!isHigh}>
-              {words.filter(Boolean).join(' · ')}
+              {wholePieces(words, Math.floor(columns / 0.8) - 3)}
             </Text>,
           ),
         )
@@ -3392,46 +3425,54 @@ export function registerGlance(on: On): void {
         )}
       </Box>
     )
-    // The header on vector surfaces: a mark, what is happening in bold, then the rest dim.
-    const headline = (mark: RenderChildren, lead: string, rest: string, look: { color?: string; isRestPlain?: boolean } = {}) => (
-      <Box flexDirection="row" alignItems="center" gap={1}>
-        {mark}
-        <Text wrap="truncate-end">
-          <Text bold color={look.color}>
-            {fit(lead, headerWidth - 3).trimEnd()}
+    // The header on vector surfaces: a mark, what is happening in bold, then the rest dim. Given as pieces, the rest
+    // keeps whole pieces that fit and leaves the others out, as the Working header does.
+    const headline = (mark: RenderChildren, lead: string, rest: string | string[], look: { isRestPlain?: boolean } = {}) => {
+      const room = Math.max(0, headerWidth - 3 - widthOf(lead))
+      const shown = Array.isArray(rest) ? wholePieces(rest, room - 3) : fit(rest, room).trimEnd()
+      return (
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          {mark}
+          <Text wrap="truncate-end">
+            <Text bold>{fit(lead, headerWidth - 3).trimEnd()}</Text>
+            <Text dimColor={!look.isRestPlain}>{Array.isArray(rest) ? (shown === '' ? '' : ` · ${shown}`) : shown}</Text>
           </Text>
-          <Text dimColor={!look.isRestPlain}>{fit(rest, Math.max(0, headerWidth - 3 - widthOf(lead))).trimEnd()}</Text>
-        </Text>
-      </Box>
-    )
+        </Box>
+      )
+    }
 
     const tourStep = isEnabled && list === null ? await read($, tourAtom) : null
     if (tourStep !== null) {
       const isLast = tourStep === TOUR.length - 1
       if (vector) {
+        // The checklist's frame: the view at the top right; under the words the places to go on the left, and on the
+        // right the tour's own buttons, Next last.
         return withBeneath(
           <Box flexDirection="column" width={columns}>
-            <Box flexDirection="row" gap={1} width={columns}>
-              {kit.icon('spark', 'active', 'Welcome')}
-              <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                <Text bold>Welcome to GlanceFlow</Text>
-                <Text wrap="wrap">{TOUR[tourStep]}</Text>
-                <Box key="tour" flexDirection="row" alignItems="center" justifyContent="space-between" gap={2} marginTop={1}>
-                  <Box flexDirection="row" alignItems="center" gap={1}>
-                    <Button key="tour-next" variant="primary" label={isLast ? 'Got it' : 'Next'} onPress={() => stepTour($, tourStep + 1)} />
-                    {!isLast && <Button key="tour-skip" label="Skip" onPress={() => stepTour($, null)} />}
-                    <Box alignItems="center" marginLeft={1}>
-                      {kit.dots(TOUR.length, tourStep)}
-                    </Box>
-                  </Box>
-                  <Box flexDirection="row" alignItems="center" columnGap={1}>
-                    {action('history', 'history', 'History', () => showHistory($, dayKey(current), true))}
-                    {action('settings', 'sliders', 'Settings', () => showSettings($))}
-                  </Box>
+            {row(
+              <Box flexDirection="row" alignItems="center" gap={1}>
+                {kit.icon('spark', 'active', 'Welcome')}
+                <Text bold wrap="truncate-end">
+                  Welcome to GlanceFlow
+                </Text>
+              </Box>,
+            )}
+            {line('tour-text', kit.blank('Welcome'), <Text wrap="wrap">{TOUR_VECTOR[tourStep]}</Text>)}
+            {warnings}
+            <Box key="tour" flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2} rowGap={1} flexWrap="wrap" width={columns} marginTop={1}>
+              <Box flexDirection="row" alignItems="center" columnGap={1}>
+                {action('history', 'history', 'History', () => showHistory($, dayKey(current), true))}
+                {action('settings', 'sliders', 'Settings', () => showSettings($))}
+              </Box>
+              <Box flexDirection="row" alignItems="center" justifyContent="flex-end" columnGap={1} flexGrow={1}>
+                {lifted.buttons as RenderElement[]}
+                <Box alignItems="center" marginLeft={1} marginRight={1}>
+                  {kit.dots(TOUR.length, tourStep)}
                 </Box>
+                {!isLast && <Button key="tour-skip" label="Skip" onPress={() => stepTour($, null)} />}
+                <Button key="tour-next" variant="primary" label={isLast ? 'Got it' : 'Next'} onPress={() => stepTour($, tourStep + 1)} />
               </Box>
             </Box>
-            {warnings}
           </Box>,
         )
       }
@@ -3451,29 +3492,8 @@ export function registerGlance(on: On): void {
 
     if (list === null) {
       const hint = vector ? 'Ask Claude for something, and its plan shows here' : 'Ask Claude for something: its plan shows here'
-      if (vector && isEnabled) {
-        // Nothing to show yet: one quiet row, the hint on the left and the ways in on the right, then Tidy up now when
-        // the chat is full, and the view last, where it sits in every state.
-        return withBeneath(
-          <Box flexDirection="column" width={columns}>
-            <Box key="header" flexDirection="row" alignItems="center" justifyContent="space-between" gap={2} width={columns}>
-              <Box flexDirection="row" alignItems="center" gap={1} flexShrink={1} minWidth={0}>
-                {kit.icon('plan', 'quiet', 'No plan yet')}
-                <Text dimColor wrap="truncate-end">
-                  {hint}
-                </Text>
-              </Box>
-              <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
-                {action('history', 'history', 'History', () => showHistory($, dayKey(current), true))}
-                {action('settings', 'sliders', 'Settings', () => showSettings($))}
-                {isChatFull && tidy}
-                <Box marginLeft={1}>{button}</Box>
-              </Box>
-            </Box>
-            {warnings}
-          </Box>,
-        )
-      }
+      // Nothing to show yet. Elsewhere than the terminal it keeps the checklist's frame: the hint and the view on top;
+      // below, the places to go on the left and, when the chat is full, Tidy up now on the right.
       return withBeneath(
         <Box flexDirection="column" width={columns}>
           {row(
@@ -3489,7 +3509,7 @@ export function registerGlance(on: On): void {
               <Box flexDirection="row" alignItems="center" gap={1}>
                 {kit.icon('plan', 'quiet', 'No plan yet')}
                 <Text dimColor wrap="truncate-end">
-                  {fit(hint, headerWidth - 3).trimEnd()}
+                  {wholePieces([hint], headerWidth - 3)}
                 </Text>
               </Box>
             ) : (
@@ -3536,8 +3556,8 @@ export function registerGlance(on: On): void {
     if (list.phase === 'needsYou') {
       const reason = needsText(list) ?? PERMISSION
       header = vector ? (
-        // Bold amber words, not a filled chip: beside the app's buttons a chip reads as one more button.
-        headline(kit.badge('bell', 'warn', 'Needs you'), 'Needs you', ` · ${reason}`, { color: TONE.warn, isRestPlain: true })
+        // The amber is in the icon; the words keep the app's text colour, which reads on a light window too.
+        headline(kit.badge('bell', 'warn', 'Needs you'), 'Needs you', [reason], { isRestPlain: true })
       ) : (
         <Text wrap="truncate-end">
           <Text bold inverse color="yellow">
@@ -3548,7 +3568,7 @@ export function registerGlance(on: On): void {
       )
     } else if (list.phase === 'stuck') {
       header = vector ? (
-        headline(kit.badge('bang', 'alert', 'Stuck'), 'Stuck', isReasonOnStep ? ` · ${list.title}` : ` · ${reason} · ${list.title}`, { color: TONE.alert })
+        headline(kit.badge('bang', 'alert', 'Stuck'), 'Stuck', isReasonOnStep ? [list.title] : [reason, list.title])
       ) : (
         <Text wrap="truncate-end" color="yellow" bold={isCalm}>
           {fit(`⚠ Stuck: ${list.stuckReason ?? FAILING}`, headerWidth).trimEnd()}
@@ -3560,7 +3580,7 @@ export function registerGlance(on: On): void {
         headline(
           kit.badge(isPause ? 'pause' : 'stop', 'quiet', isPause ? 'Paused' : 'Stopped'),
           isPause ? 'Paused' : 'Stopped',
-          isReasonOnStep ? ` · ${list.title}` : ` · ${reason} · ${list.title}`,
+          isReasonOnStep ? [list.title] : [reason, list.title],
         )
       ) : (
         <Text wrap="truncate-end" dimColor={!isCalm} bold={isCalm}>
@@ -3573,7 +3593,7 @@ export function registerGlance(on: On): void {
     } else if (list.phase === 'background') {
       const running = list.helpers.filter(one => one.status === 'running').length
       header = vector ? (
-        headline(kit.icon('clock', 'active', 'In the background'), 'Still working in the background', ` · ${running} left · ${list.title} · ${elapsed}`)
+        headline(kit.icon('clock', 'active', 'In the background'), 'Still working in the background', [`${running} left`, list.title, elapsed])
       ) : (
         <Text wrap="truncate-end" color="cyan" bold={isCalm}>
           {fit(`◷ Still working in the background · ${running} left · ${list.title} · ${elapsed}`, headerWidth).trimEnd()}
@@ -3581,7 +3601,7 @@ export function registerGlance(on: On): void {
       )
     } else if (list.phase === 'done') {
       header = vector ? (
-        headline(kit.badge('check', 'ok', 'All done'), 'All done', ` · ${list.title} · took ${elapsed}${jobTokenNote ? ` · ${jobTokenNote}` : ''}`)
+        headline(kit.badge('check', 'ok', 'All done'), 'All done', [list.title, `took ${elapsed}`, jobTokenNote])
       ) : (
         <Text wrap="truncate-end" color="green" bold={isCalm}>
           {fit(`✓ All done · ${list.title} · took ${elapsed}${jobTokenNote ? ` · ${jobTokenNote}` : ''}`, headerWidth).trimEnd()}

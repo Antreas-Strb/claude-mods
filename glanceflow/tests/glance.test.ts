@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, asksQuestion, carryTokens, questionOf, isButtonsOnly, isContinueWords, liftButtons, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, asksQuestion, carryTokens, questionOf, isButtonsOnly, isContinueWords, liftButtons, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, wholePieces, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
@@ -1226,6 +1226,103 @@ test('in the Desktop app the view is a menu at the top right, and everything tha
   expect(card.all).toContain('A card from another mod')
 })
 
+test('in the Desktop app the welcome cards and the empty band keep that frame: the view on top, places left, actions right', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: 1_000_000 })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/work', surface: 'desktop' } as never)
+  const drawn = async () => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+    const boxes = await ui.findAll({ type: 'Box' })
+    const part = (key: string) => JSON.stringify(boxes.find(one => one.props.key === key) ?? null)
+    await ui.unmount()
+    return { top: part('header-right'), bottom: part('actions'), tour: part('tour') }
+  }
+
+  const welcome = await drawn()
+  expect(welcome.top).toContain('"type":"Select"')
+  expect(welcome.tour.indexOf('Settings')).toBeGreaterThan(welcome.tour.indexOf('History'))
+  expect(welcome.tour.indexOf('Skip')).toBeGreaterThan(welcome.tour.indexOf('Settings'))
+  expect(welcome.tour.indexOf('Next')).toBeGreaterThan(welcome.tour.indexOf('Skip'))
+
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await band.press({ key: 'tour-skip' })
+  await band.unmount()
+  const empty = await drawn()
+  expect(empty.top).toContain('"type":"Select"')
+  expect(empty.top).not.toContain('History')
+  expect(empty.bottom).toContain('History')
+})
+
+test('in the Desktop app a job that stops on a question offers no Continue, which would read as yes', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it', 'Ship it'] })
+  await $.turn.complete({ answer: 'I stopped before the check.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect((await texts($, 'desktop')).join('\n')).toContain('Continue')
+
+  await $.turn.start({ text: 'continue', turnId: 't2' })
+  await $.turn.complete({ answer: 'Should I deploy it now?', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' })
+  const asked = (await texts($, 'desktop')).join('\n')
+  expect(asked).toContain('Should I deploy it now?')
+  expect(asked).not.toContain('Continue')
+})
+
+test('the second welcome card says where the yellow is: in the words on the terminal, a bell beside them in the Desktop app', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: 1_000_000 })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/work', surface: 'desktop' } as never)
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await band.press({ key: 'tour-next' })
+  await band.unmount()
+  expect((await texts($, 'desktop', 120)).join('\n')).toContain('Needs you beside a yellow bell')
+  expect((await texts($, 'terminal', 120)).join('\n')).toContain('Needs you in yellow')
+})
+
+test('in the Desktop app a header keeps whole pieces: what has no room is left out, never cut mid-word', async ($, on) => {
+  expect(wholePieces(['Build my landing page', 'took 3m 46s'], 30)).toBe('Build my landing page')
+  expect(wholePieces(['Build my landing page', 'took 3m 46s'], 20)).toBe('took 3m 46s')
+  expect(wholePieces(['Should I release 0.24.0 now?'], 18)).toBe('Should I release…')
+  expect(wholePieces(['Build my landing page'], 5)).toBe('')
+
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await callTool($, { tool: PROGRESS, task: 'Write it', percent: 100 })
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  for (const width of [30, 44, 60]) {
+    const header = (await texts($, 'desktop', width)).find(one => one.startsWith('All done')) ?? ''
+    expect(header).not.toContain('…')
+  }
+})
+
+test('in the Desktop app a usage limit offers Check again, and a stopped job with a full chat offers Tidy up now alone', async ($, on) => {
+  world(on)
+  on('classic.StopFailure', () => ({}) as never)
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await $.classic.StopFailure({ error: 'rate_limit', error_details: '' } as never)
+  const stuck = (await texts($, 'desktop')).join('\n')
+  expect(stuck).toContain('Check again')
+  expect(stuck).not.toContain('Try again')
+
+  await $.turn.start({ text: 'continue', turnId: 't2' })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' })
+  expect((await texts($, 'desktop')).join('\n')).toContain('Fresh chat')
+  await $.session.measure({ context: { window: 200_000, tokens: 120_000, percent: 60 }, rateLimits: [], changed: ['context'] } as never)
+  const full = (await texts($, 'desktop')).join('\n')
+  expect(full).toContain('Tidy up now')
+  expect(full).not.toContain('Fresh chat')
+  expect(full).toContain('Continue')
+})
+
 test('another mod that draws only buttons joins the actions; anything with words, or nothing, does not', () => {
   const button = (label: string) => ({ type: 'Button', props: { key: label, label } })
   expect(isButtonsOnly(button('Replay 1 edit'))).toBe(true)
@@ -1303,6 +1400,25 @@ test('on the desktop every mark is an SVG icon, and no text or button carries a 
     expect(svgs.every(one => String(one.props.source).startsWith('<svg '))).toBe(true)
     expect(words.filter(text => GLYPH_MARKS.test(text))).toEqual([])
   }
+})
+
+// A fixed amber or red can't follow the app's theme: on a light window those words fall under 4.5:1 contrast.
+test('on the desktop Needs you and Stuck read in the text colour, with the colour in their icon', async ($, on) => {
+  world(on)
+  on('classic.StopFailure', () => ({}) as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  const leadColor = async (lead: string) => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' } as never)
+    const found = (await ui.findAll({ type: 'Text' })).filter(one => one.text === lead)
+    await ui.unmount()
+    expect(found.length).toBe(1)
+    return found[0]?.props.color
+  }
+  await $.classic.Notification({ message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+  expect(await leadColor('Needs you')).toBeUndefined()
+  await $.classic.StopFailure({ error: 'rate_limit', error_details: '' } as never)
+  expect(await leadColor('Stuck')).toBeUndefined()
 })
 
 // The desktop app draws nothing for an Svg whose alt is empty: a mark without words would just be missing.
@@ -1613,8 +1729,8 @@ test('desktop notices are off until turned on; then the computer says why Claude
   await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
   await clock.advance(1)
   expect(shown).toHaveLength(1)
-  expect(shown[0][0]).toBe('Claude needs you')
-  expect(shown[0][1]).not.toBe('')
+  expect(shown[0]?.[0]).toBe('Claude needs you')
+  expect(shown[0]?.[1]).toBeTruthy()
   // Sounds stay off: a notice alone.
   expect(heard).toEqual([])
 
