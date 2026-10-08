@@ -29,6 +29,7 @@ import {
   teamReport,
   weekSummary,
   paceFromHistory,
+  plainDuration,
   upsertEntry,
 } from './history'
 import { findSecrets, maskPrivate } from './privacy'
@@ -100,6 +101,8 @@ const STALL_MS = 3 * 60_000
 const PERMISSION = "Answer Claude's request in the chat"
 const QUESTION = "Answer Claude's question in the chat"
 const WAITING = 'Reply to Claude in the box below'
+// What a mark beside a state's own bold word says: the word follows, so a screen reader hears it once, not twice.
+const STATUS = 'Status'
 const APPROVE = 'Read the plan, then press Start or tell Claude what to change'
 
 const enabledAtom = atom({ plugin: 'glanceflow', key: 'glanceEnabled' } as const, true)
@@ -2616,7 +2619,7 @@ export function registerGlance(on: On): void {
         <Box flexDirection="column">
           {vector ? (
             <Box flexDirection="row" gap={1}>
-              {kit.icon('plan', 'quiet', 'No plan yet')}
+              {kit.icon('plan', 'quiet', 'Plan')}
               <Text dimColor wrap="wrap">
                 {words}
               </Text>
@@ -2837,7 +2840,8 @@ export function registerGlance(on: On): void {
         ...usage.limits.map(one => `${one.label} ${Math.round(one.percent)}%`),
         usage.contextPercent === null ? '' : `chat ${Math.round(usage.contextPercent)}% full`,
       ].filter(Boolean)
-      if (plan.length > 0) footer.push(`Plan usage: ${plan.join(' · ')}`)
+      // Elsewhere than the terminal "Plan" is a button: the line says Usage, as the band does.
+      if (plan.length > 0) footer.push(`${vector ? 'Usage' : 'Plan usage'}: ${plan.join(' · ')}`)
     }
 
     const isDone = list.phase === 'done'
@@ -2866,10 +2870,10 @@ export function registerGlance(on: On): void {
         {status &&
           (vector ? (
             <Box key="status" flexDirection="row" gap={1} marginTop={1}>
-              {status.tone === 'active' ? kit.icon(status.icon, status.tone, status.lead) : kit.badge(status.icon, status.tone, status.lead)}
+              {status.tone === 'active' ? kit.icon(status.icon, status.tone, STATUS) : kit.badge(status.icon, status.tone, STATUS)}
               <Box flexShrink={1}>
                 <Text wrap="wrap">
-                  <Text bold color={status.color}>
+                  <Text bold>
                     {status.lead}
                   </Text>
                   <Text>{` · ${status.text}`}</Text>
@@ -2952,6 +2956,7 @@ export function registerGlance(on: On): void {
 
     const report = reportOf(view)
     if (view.isReportShown) {
+      const copy = <Button key="copy" variant="primary" label="Copy report" onPress={() => showReport($, true, report, e.surface)} />
       return (
         <Box flexDirection="column" width={columns}>
           {picker}
@@ -2978,13 +2983,15 @@ export function registerGlance(on: On): void {
           </Box>
           <Box key="report-actions" flexDirection="row" gap={1} marginTop={1}>
             {vector && <Button key="back" label="Back to the list" onPress={() => showReport($, false, report, e.surface)} />}
-            <Button key="copy" variant="primary" label="Copy report" onPress={() => showReport($, true, report, e.surface)} />
+            {!vector && copy}
             {view.reportSpan === 'mine' ? null : view.reportSpan === 'week' ? (
               <Button key="span" label={vector ? 'Day report' : 'This day'} onPress={() => showReportSpan($, 'day', e.surface)} />
             ) : (
               <Button key="span" label={vector ? 'Week report' : 'This week'} onPress={() => showReportSpan($, 'week', e.surface)} />
             )}
             {!vector && <Button key="back" label="Back to the list" onPress={() => showReport($, false, report, e.surface)} />}
+            {/* Elsewhere than the terminal the main button comes last, as a dialog's does. */}
+            {vector && copy}
             {close}
           </Box>
         </Box>
@@ -3037,7 +3044,8 @@ export function registerGlance(on: On): void {
     const titleWidth = Math.max(12, Math.min(MAX_NAME, columns - 9 - 36))
     const rows = view.entries.map(one => {
       const [mark, color] = marks[one.outcome]
-      const took = one.finishedAt === null ? 'not finished' : (vector ? durationWords : formatDuration)(one.finishedAt - one.startedAt)
+      // Elsewhere than the terminal times read as the report says them ("13 min"), so one job reads one way.
+      const took = one.finishedAt === null ? 'not finished' : (vector ? plainDuration : formatDuration)(one.finishedAt - one.startedAt)
       const details = [
         `${one.stepsDone}/${one.stepsTotal}`,
         took,
@@ -3115,7 +3123,7 @@ export function registerGlance(on: On): void {
     const total = [
       `${view.entries.length} ${view.entries.length === 1 ? 'task' : 'tasks'}`,
       counts.join(', '),
-      (vector ? durationWords : formatDuration)(time),
+      (vector ? plainDuration : formatDuration)(time),
       tokenNote(newTokens + cached, cached),
       priced.length > 0 ? formatCost(spent) : '',
     ]
@@ -3319,20 +3327,23 @@ export function registerGlance(on: On): void {
       )
     }
 
-    if (isEnabled && (await read($, recapAtom))) {
+    const isRecapShown = isEnabled && (await read($, recapAtom))
+    const recapButton = <Button key="recap" label="Where we left off" onPress={() => showRecap($)} />
+    const recapOk = <Button key="recap-ok" plain={vector ? undefined : true} label="OK" onPress={() => update($, recapAtom, () => false)} />
+    if (isRecapShown) {
       const buttons = (
         <Box flexDirection="row" gap={1}>
-          <Button key="recap" label="Where we left off" onPress={() => showRecap($)} />
-          <Button key="recap-ok" plain={vector ? undefined : true} label="OK" onPress={() => update($, recapAtom, () => false)} />
+          {recapButton}
+          {recapOk}
         </Box>
       )
       warnings.push(
         vector ? (
+          // Its buttons sit with the other actions at the bottom right.
           line(
             'recap',
             kit.badge('check', 'ok', 'Tidied up'),
             <Text wrap="truncate-end">Chat tidied up. Claude kept a checkpoint of the work.</Text>,
-            buttons,
           )
         ) : (
           <Box key="recap" flexDirection="row" justifyContent="space-between" width={columns}>
@@ -3395,6 +3406,8 @@ export function registerGlance(on: On): void {
             {places}
           </Box>
           <Box flexDirection="row" alignItems="center" justifyContent="flex-end" columnGap={1} rowGap={1} flexWrap="wrap" flexGrow={1} flexShrink={1} minWidth={0}>
+            {isRecapShown && recapButton}
+            {isRecapShown && recapOk}
             {lifted.buttons as RenderElement[]}
             {isChatFull && tidy}
             {handoffItem}
@@ -3557,7 +3570,7 @@ export function registerGlance(on: On): void {
       const reason = needsText(list) ?? PERMISSION
       header = vector ? (
         // The amber is in the icon; the words keep the app's text colour, which reads on a light window too.
-        headline(kit.badge('bell', 'warn', 'Needs you'), 'Needs you', [reason], { isRestPlain: true })
+        headline(kit.badge('bell', 'warn', STATUS), 'Needs you', [reason], { isRestPlain: true })
       ) : (
         <Text wrap="truncate-end">
           <Text bold inverse color="yellow">
@@ -3568,7 +3581,7 @@ export function registerGlance(on: On): void {
       )
     } else if (list.phase === 'stuck') {
       header = vector ? (
-        headline(kit.badge('bang', 'alert', 'Stuck'), 'Stuck', isReasonOnStep ? [list.title] : [reason, list.title])
+        headline(kit.badge('bang', 'alert', STATUS), 'Stuck', isReasonOnStep ? [list.title] : [reason, list.title])
       ) : (
         <Text wrap="truncate-end" color="yellow" bold={isCalm}>
           {fit(`⚠ Stuck: ${list.stuckReason ?? FAILING}`, headerWidth).trimEnd()}
@@ -3578,7 +3591,7 @@ export function registerGlance(on: On): void {
       const isPause = list.stopKind === 'pause'
       header = vector ? (
         headline(
-          kit.badge(isPause ? 'pause' : 'stop', 'quiet', isPause ? 'Paused' : 'Stopped'),
+          kit.badge(isPause ? 'pause' : 'stop', 'quiet', STATUS),
           isPause ? 'Paused' : 'Stopped',
           isReasonOnStep ? [list.title] : [reason, list.title],
         )
@@ -3593,7 +3606,7 @@ export function registerGlance(on: On): void {
     } else if (list.phase === 'background') {
       const running = list.helpers.filter(one => one.status === 'running').length
       header = vector ? (
-        headline(kit.icon('clock', 'active', 'In the background'), 'Still working in the background', [`${running} left`, list.title, elapsed])
+        headline(kit.icon('clock', 'active', STATUS), 'Still working in the background', [`${running} left`, list.title, elapsed])
       ) : (
         <Text wrap="truncate-end" color="cyan" bold={isCalm}>
           {fit(`◷ Still working in the background · ${running} left · ${list.title} · ${elapsed}`, headerWidth).trimEnd()}
@@ -3601,7 +3614,7 @@ export function registerGlance(on: On): void {
       )
     } else if (list.phase === 'done') {
       header = vector ? (
-        headline(kit.badge('check', 'ok', 'All done'), 'All done', [list.title, `took ${elapsed}`, jobTokenNote])
+        headline(kit.badge('check', 'ok', STATUS), 'All done', [list.title, `took ${elapsed}`, jobTokenNote])
       ) : (
         <Text wrap="truncate-end" color="green" bold={isCalm}>
           {fit(`✓ All done · ${list.title} · took ${elapsed}${jobTokenNote ? ` · ${jobTokenNote}` : ''}`, headerWidth).trimEnd()}
@@ -3635,7 +3648,7 @@ export function registerGlance(on: On): void {
       header = vector ? (
         // Every state's header reads the same way: its mark, the state in bold, then the job and how far it is.
         headline(
-          list.hasPlan ? kit.ring(overall, 0, `${overall}% done`) : kit.ring(null, isCalm ? 0 : tick, 'Working'),
+          list.hasPlan ? kit.ring(overall, 0, `${overall}% done`) : kit.ring(null, isCalm ? 0 : tick, STATUS),
           lead,
           keepsTitle ? ` · ${list.title}${details}` : details,
         )
@@ -3687,6 +3700,14 @@ export function registerGlance(on: On): void {
     // What follows the name reads as the header does: parts joined by " · " with no wider gap before the dot (the
     // spaces are no-break ones, which the app keeps at the start of a part), the bar standing in for the first.
     const join = (words: string) => `\u00a0·\u00a0${words}`
+    // Elsewhere than the terminal a row's words are measured here, at about 0.8 of a cell a character, so the app never
+    // cuts one: past the mark (and `cells` more kept beside the name), a name too long for the row keeps whole words, and
+    // the tail keeps whole pieces in the room left after the name and the `gap` before the tail.
+    const roomFor = (cells: number) => Math.max(0, Math.floor((columns - 3 - cells) / 0.8) - 1)
+    const fitted = (name: string, tail: string, room: number, gap = 3) => {
+      const shownName = widthOf(name) <= room ? name : wholePieces([name], room)
+      return { name: shownName, tail: tail === '' ? '' : wholePieces(tail.split(' · '), room - widthOf(shownName) - gap) }
+    }
     const step = (key: string, mark: RenderChildren, name: RenderChildren, tail: string, extra?: RenderChildren, note = '') => (
       <Box key={key} flexDirection="row" alignItems="center" width={columns}>
         {mark}
@@ -3715,7 +3736,7 @@ export function registerGlance(on: On): void {
           key,
           kit.blank('Detail'),
           <Text dimColor wrap="truncate-end">
-            {text}
+            {wholePieces(text.split(' · '), roomFor(0))}
           </Text>,
         )
       ) : (
@@ -3778,7 +3799,7 @@ export function registerGlance(on: On): void {
               key,
               kit.icon('more', 'quiet', 'Folded'),
               <Text dimColor wrap="truncate-end">
-                {words}
+                {fitted(words, '', roomFor(0)).name}
               </Text>,
               '',
             )
@@ -3810,7 +3831,7 @@ export function registerGlance(on: On): void {
               key,
               kit.icon('more', 'quiet', 'Folded'),
               <Text dimColor wrap="truncate-end">
-                {words}
+                {fitted(words, '', roomFor(0)).name}
               </Text>,
               '',
             )
@@ -3826,6 +3847,8 @@ export function registerGlance(on: On): void {
         return
       }
       if (one.status === 'done') {
+        // Its time follows it, dim: kept to the far right it read as the time left.
+        const done = fitted(one.name, [showsSummary && one === justDone ? one.summary! : '', noteOf(one)].filter(Boolean).join(' · '), roomFor(0))
         lines.push({
           key,
           isActive: false,
@@ -3834,10 +3857,9 @@ export function registerGlance(on: On): void {
               key,
               kit.icon('done', 'ok', 'Done'),
               <Text dimColor wrap="truncate-end">
-                {one.name}
+                {done.name}
               </Text>,
-              // Its time follows it, dim: kept to the far right it read as the time left.
-              [showsSummary && one === justDone ? one.summary! : '', noteOf(one)].filter(Boolean).join(' · '),
+              done.tail,
             )
           ) : (
             <Box key={key} flexDirection="row">
@@ -3864,7 +3886,7 @@ export function registerGlance(on: On): void {
         if (vector && list.approval === 'waiting') {
           // Nothing has started while the plan waits for Start: the first step is one more to come, and the amber of
           // the header is the only call on you.
-          element = step(key, kit.open('Next'), <Text wrap="truncate-end">{one.name}</Text>, '')
+          element = step(key, kit.open('Next'), <Text wrap="truncate-end">{fitted(one.name, '', roomFor(0)).name}</Text>, '')
         } else if (vector) {
           // The bar shows how far the step is, so no number stands beside it; a step that waits on you or has stopped
           // goes grey, the header saying why. With no progress reported yet there is no bar, only what Claude is
@@ -3884,13 +3906,21 @@ export function registerGlance(on: On): void {
           // A few letters of what Claude is doing say nothing: it shows only where a dozen or more fit. Why the step
           // stopped always shows; the header no longer says it.
           const tailRoom = columns - 3 - widthOf(one.name) - (hasPercent || isSweeping ? 10 : 0) - (note !== '' ? widthOf(note) + 3 : 0)
+          // The bar takes 8 cells and a cell either side; the time beside it is never cut.
+          const hasBar = hasPercent || isSweeping
+          const shown = fitted(
+            one.name,
+            tailRoom >= 14 || (isReasonOnStep && reason !== '') ? tail : '',
+            roomFor(hasBar ? 10 : 0) - (note !== '' ? widthOf(note) + 3 : 0),
+            hasBar ? 0 : 3,
+          )
           element = step(
             key,
             kit.badge(standing?.icon ?? 'play', standing?.tone ?? 'active', label),
             <Text bold wrap="truncate-end">
-              {one.name}
+              {shown.name}
             </Text>,
-            tailRoom >= 14 || (isReasonOnStep && reason !== '') ? tail : '',
+            shown.tail,
             hasPercent || isSweeping ? (
               <Box key="state" flexDirection="row" alignItems="center" flexShrink={0}>
                 {hasPercent
@@ -3933,7 +3963,7 @@ export function registerGlance(on: On): void {
           key,
           isActive: false,
           element: vector ? (
-            step(key, kit.open(label), <Text wrap="truncate-end">{one.name}</Text>, '')
+            step(key, kit.open(label), <Text wrap="truncate-end">{fitted(one.name, '', roomFor(0)).name}</Text>, '')
           ) : (
             <Box key={key} flexDirection="row">
               <Text dimColor>○ </Text>
@@ -3969,6 +3999,8 @@ export function registerGlance(on: On): void {
           .join(' · ')
         const isRunning = helper.status === 'running'
         if (vector) {
+          // Its own small mark and a gap take two cells more.
+          const shown = fitted(helper.label, details, roomFor(2))
           lines.push({
             key: helperKey,
             isActive: isRunning,
@@ -3982,8 +4014,8 @@ export function registerGlance(on: On): void {
                     ? kit.badge('close', 'alert', 'Failed', 13)
                     : kit.badge('check', 'ok', 'Done', 13)}
                 <Text wrap="truncate-end">
-                  <Text dimColor={!isRunning}>{helper.label}</Text>
-                  {details !== '' && <Text dimColor>{` · ${details}`}</Text>}
+                  <Text dimColor={!isRunning}>{shown.name}</Text>
+                  {shown.tail !== '' && <Text dimColor>{` · ${shown.tail}`}</Text>}
                 </Text>
               </Box>,
             ),

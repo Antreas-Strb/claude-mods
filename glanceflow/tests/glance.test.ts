@@ -1284,6 +1284,81 @@ test('the second welcome card says where the yellow is: in the words on the term
   expect((await texts($, 'terminal', 120)).join('\n')).toContain('Needs you in yellow')
 })
 
+test('in the Desktop app a step row keeps whole words: in a narrow band the name stays and what follows keeps whole words', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Read your brand notes', 'Polish the footer'] })
+  await callTool($, { tool: PROGRESS, task: 'Read your brand notes', percent: 100 })
+  await callTool($, { tool: PROGRESS, task: 'Polish the footer', percent: 100, summary: 'Tidied the footer links' })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  // 30 cells leave about 32 characters past the mark: the name, " · ", then as many whole words as fit.
+  const narrow = await texts($, 'desktop', 30)
+  expect(narrow).toContain('Polish the footer')
+  expect(narrow.some(one => one.endsWith(' · Tidied the…'))).toBe(true)
+  expect((await texts($, 'desktop', 80)).some(one => one.endsWith('Tidied the footer links'))).toBe(true)
+})
+
+test('in the Desktop app the Plan panel says Usage, as the band does, so it does not read as the Plan button', async ($, on) => {
+  world(on)
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  await $.command.run({ command: 'glanceflow', args: 'details on' } as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await $.session.measure({ context: { window: 200_000, tokens: 68_000, percent: 34 }, rateLimits: [{ kind: 'five_hour', percentUsed: 42 }], changed: ['context', 'rateLimits'] } as never)
+  const ui = await $.ui.mount({ ...PLAN_PANE, surface: 'desktop' })
+  const words = (await ui.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  await ui.unmount()
+  expect(words).toContain('Usage: 5-hour 42%')
+  expect(words).not.toContain('Plan usage')
+})
+
+test('in the Desktop app History reads every time one way, as the report does, and the report puts Copy report last', async ($, on) => {
+  mock.clock(on, { now: new Date(2026, 9, 6, 18, 0).getTime() })
+  mock.store(on, {
+    'history:2026-10-06': [
+      { ...ENTRY, jobId: 'a', startedAt: new Date(2026, 9, 6, 9, 0).getTime(), finishedAt: new Date(2026, 9, 6, 9, 12, 30).getTime(), title: 'Build the pricing section', outcome: 'done', stepsDone: 2, stepsTotal: 2, doneSteps: ['Write it', 'Check it'], openSteps: [] },
+    ],
+  })
+  on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
+  on('ui.copy', () => ({ value: { isCopied: true } }) as never)
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  const list = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const shown = (await list.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  await list.press({ key: 'report' })
+  await list.unmount()
+  expect(shown).toContain('13 min')
+  expect(shown).not.toContain('12m 30s')
+
+  const report = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const boxes = await report.findAll({ type: 'Box' })
+  await report.unmount()
+  const actions = JSON.stringify(boxes.find(one => one.props.key === 'report-actions') ?? null)
+  expect(actions.indexOf('Copy report')).toBeGreaterThan(actions.indexOf('Back to the list'))
+  expect(actions.indexOf('Copy report')).toBeGreaterThan(actions.indexOf('Week report'))
+})
+
+test('in the Desktop app the mark beside a state says Status, so a screen reader hears the state once', async ($, on) => {
+  world(on)
+  const alts = async () => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+    const found = (await ui.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
+    await ui.unmount()
+    return found
+  }
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await $.classic.Notification({ message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+  expect(await alts()).toContain('Status')
+  expect(await alts()).not.toContain('Needs you')
+  await callTool($, { tool: PROGRESS, task: 'Write it', percent: 100 })
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(await alts()).toContain('Status')
+  expect(await alts()).not.toContain('All done')
+})
+
 test('in the Desktop app a header keeps whole pieces: what has no room is left out, never cut mid-word', async ($, on) => {
   expect(wholePieces(['Build my landing page', 'took 3m 46s'], 30)).toBe('Build my landing page')
   expect(wholePieces(['Build my landing page', 'took 3m 46s'], 20)).toBe('took 3m 46s')
@@ -2807,6 +2882,12 @@ test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads
   let band = (await texts($, 'terminal')).join('\n')
   expect(band).toContain('Chat tidied up. Claude kept a checkpoint of the work.')
   expect(band).toContain('Where we left off')
+  // In the Desktop app its buttons sit with the other actions at the bottom right, not in the note's row.
+  const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const deskBoxes = await desk.findAll({ type: 'Box' })
+  await desk.unmount()
+  expect(JSON.stringify(deskBoxes.find(one => one.props.key === 'actions') ?? null)).toContain('Where we left off')
+  expect(JSON.stringify(deskBoxes.find(one => one.props.key === 'recap') ?? null)).not.toContain('Where we left off')
 
   // Where we left off opens the checkpoint in a side panel, and the note on the band goes.
   const card = await $.ui.mount({ ...BAND, surface: 'terminal' })
