@@ -130,11 +130,6 @@ export function openRingSvg(size = 16, height = size): string {
   return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none"><circle cx="12" cy="12" r="8.5" stroke="${TONE.quiet}" stroke-width="1.9"/></svg>`
 }
 
-/** An empty square the size of an icon: keeps an indented line in line with the names above it. */
-export function blankSvg(size = 16, height = size): string {
-  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}"><rect width="24" height="24" fill="none"/></svg>`
-}
-
 /**
  * A slim progress bar `width` px wide. A known `percent` fills from the left; with none, a short bar travels along
  * the track, `sweep` (0 to 1) saying how far.

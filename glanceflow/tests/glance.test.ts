@@ -1326,6 +1326,8 @@ test('in the Desktop app History reads every time one way, as the report does, a
   await $.command.run({ command: 'glanceflow', args: 'history' } as never)
   const list = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const shown = (await list.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  // A job's details sit in empty room under its name: nothing there for a screen reader to say.
+  expect((await list.findAll({ type: 'Svg' })).map(one => String(one.props.alt))).not.toContain('Detail')
   await list.press({ key: 'report' })
   await list.unmount()
   expect(shown).toContain('13 min')
@@ -1357,6 +1359,70 @@ test('in the Desktop app the mark beside a state says Status, so a screen reader
   await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
   expect(await alts()).toContain('Status')
   expect(await alts()).not.toContain('All done')
+})
+
+test('in the Desktop app the bold words of a header are never cut: a narrow band says them in fewer whole words', async ($, on) => {
+  world(on)
+  on('classic.Stop', () => ({}) as never)
+  await $.turn.start({ text: 'Merge the pull request', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Watch the checks'] })
+  await callTool($, { tool: PROGRESS, task: 'Watch the checks', percent: 100 })
+  await $.turn.complete({ answer: 'Merged. Watching CI.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.classic.Stop({
+    stop_hook_active: false,
+    background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'Wait for the checks' }],
+  } as never)
+  for (const [width, lead] of [[30, 'Background'], [40, 'In the background'], [60, 'Still working in the background']] as const) {
+    const shown = await texts($, 'desktop', width)
+    expect(shown).toContain(lead)
+    expect(shown.join('\n')).not.toMatch(/(Still|In the|Backgr)\w*…/)
+  }
+})
+
+test('in the Desktop app the welcome card says Welcome whole in a narrow band, and its words sit in empty room', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: 1_000_000 })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/work', surface: 'desktop' } as never)
+  expect(await texts($, 'desktop', 80)).toContain('Welcome to GlanceFlow')
+  const narrow = await texts($, 'desktop', 30)
+  expect(narrow).toContain('Welcome')
+  expect(narrow).not.toContain('Welcome to GlanceFlow')
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const words = (await ui.findAll({ type: 'Box' })).find(one => one.props.key === 'tour-text')
+  await ui.unmount()
+  expect(JSON.stringify(words ?? null)).not.toContain('"type":"Svg"')
+})
+
+test('in the Desktop app a line under a step starts in empty room as wide as a mark, so a screen reader hears no blank', async ($, on) => {
+  world(on)
+  on('agent.spawn', () => ({ model: 'claude-haiku-4-5-20251001', agentId: 'a1' }) as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Check the page', 'Fix the links'] })
+  await callTool($, { tool: 'Bash', command: 'npx playwright test', description: 'Check the page on a phone screen' })
+  await $.agent.spawn({
+    tool_use_id: 'tu1', prompt: 'Review it', description: 'Review the page', subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: true, fork: false,
+  } as never)
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const boxes = await band.findAll({ type: 'Box' })
+  const alts = (await band.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
+  await band.unmount()
+  type Drawn = { type: string; props: Record<string, unknown>; children?: Drawn[] }
+  const first = (key: string) => (boxes.find(one => one.props.key === key) as unknown as Drawn | undefined)?.children?.[0]
+  expect(first('helper-a1')).toEqual({ type: 'Box', props: { width: 2, flexShrink: 0 } })
+  expect(first('task-0')?.props).toEqual({ width: 2, flexShrink: 0 })
+  expect(alts).not.toContain('Detail')
+  expect(alts).not.toContain('Helper')
+
+  await detailsOn($)
+  const plan = await $.ui.mount({ ...PLAN_PANE, surface: 'desktop' })
+  const planAlts = (await plan.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
+  await plan.unmount()
+  expect(planAlts).not.toContain('Detail')
 })
 
 test('in the Desktop app a header keeps whole pieces: what has no room is left out, never cut mid-word', async ($, on) => {

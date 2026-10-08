@@ -33,7 +33,7 @@ import {
   upsertEntry,
 } from './history'
 import { findSecrets, maskPrivate } from './privacy'
-import { GLYPH, TONE_TEXT, badgeSvg, blankSvg, dotsSvg, iconSvg, meterSvg, openRingSvg, ringSvg } from './look'
+import { GLYPH, TONE_TEXT, badgeSvg, dotsSvg, iconSvg, meterSvg, openRingSvg, ringSvg } from './look'
 import type { IconName, Tone } from './look'
 
 const PLUGIN = 'glanceflow'
@@ -1555,18 +1555,29 @@ const adoptGlanceStore = async ($: $) => {
 const ICON = 15
 /** The desktop's line of text, in CSS px: marks are drawn this tall, centered, so they line up with a first line. */
 const LINE = 21
+/** The room a mark of ICON size takes, in cells: as wide as the room a line under it keeps, so the two start alike. */
+const MARK = 2
 
 /**
  * The marks every screen draws, from one icon set (look.ts): SVG where the surface draws vectors (the desktop app,
  * VS Code, the phone), one-cell glyphs on the terminal, so a status reads the same everywhere.
  */
 function kitOf(table: ElementTable, surface: RenderSurface) {
-  const { Text } = table
+  const { Box, Text } = table
   // The terminal's table answers for Svg too, and draws it as an empty box: go by the surface.
   const Svg = surface !== 'terminal' && 'Svg' in table ? table.Svg : null
   // Every drawing says what it is: the desktop app draws nothing for an Svg whose alt is empty.
   const draw = (source: string, alt: string, width: number, height = width): RenderElement | null =>
     Svg ? <Svg source={source} alt={alt} width={width} height={height} /> : null
+  // A mark of ICON size sits in MARK cells, so a blank of the same cells lines a line up under it with nothing to read.
+  const placed = (drawn: RenderElement | null, size: number) =>
+    drawn !== null && size === ICON ? (
+      <Box width={MARK} flexShrink={0}>
+        {drawn}
+      </Box>
+    ) : (
+      drawn
+    )
   const glyph = (name: IconName, tone: Tone) => (
     <Text color={TONE_TEXT[tone]} dimColor={tone === 'quiet'}>
       {GLYPH[name]}
@@ -1576,17 +1587,18 @@ function kitOf(table: ElementTable, surface: RenderSurface) {
   return {
     isVector: Svg !== null,
     /** A line icon. */
-    icon: (name: IconName, tone: Tone, alt: string, size = ICON) => draw(iconSvg(name, tone, size, LINE), alt, size, LINE) ?? glyph(name, tone),
+    icon: (name: IconName, tone: Tone, alt: string, size = ICON) => placed(draw(iconSvg(name, tone, size, LINE), alt, size, LINE), size) ?? glyph(name, tone),
     /** A filled disc with the icon in white: done, failed, waiting on you, stopped. */
     badge: (name: IconName, tone: Tone, alt: string, size = ICON) =>
-      draw(badgeSvg(name, tone, size, LINE), alt, size, LINE) ?? glyph(name, tone),
+      placed(draw(badgeSvg(name, tone, size, LINE), alt, size, LINE), size) ?? glyph(name, tone),
     /** The current step: a ring filled to `percent`, or turning with `turn` while there is none. */
     ring: (percent: number | null, turn: number, alt: string, size = ICON, tone: Tone = 'active') =>
-      draw(ringSvg(tone, size, percent, turn, LINE), alt, size, LINE) ?? glyph('play', tone),
+      placed(draw(ringSvg(tone, size, percent, turn, LINE), alt, size, LINE), size) ?? glyph('play', tone),
     /** A step still to come. */
-    open: (alt: string, size = ICON) => draw(openRingSvg(size, LINE), alt, size, LINE) ?? <Text dimColor>○</Text>,
-    /** Room the size of an icon, so a line under a step starts where the step's name does. */
-    blank: (alt: string, size = ICON) => draw(blankSvg(size, LINE), alt, size, LINE) ?? <Text> </Text>,
+    open: (alt: string, size = ICON) => placed(draw(openRingSvg(size, LINE), alt, size, LINE), size) ?? <Text dimColor>○</Text>,
+    /** A mark's room with nothing in it, so a line under a step starts where the step's name does; no drawing, so a
+     * screen reader passes over it. */
+    blank: () => (Svg ? <Box width={MARK} flexShrink={0} /> : <Text> </Text>),
     /** A slim bar; vector surfaces only. */
     meter: (tone: Tone, percent: number | null, sweep: number, alt: string, width = 96) => draw(meterSvg(tone, width, percent, sweep), alt, width, 6),
     /** Where the welcome cards are; vector surfaces only. */
@@ -2712,7 +2724,7 @@ export function registerGlance(on: On): void {
     const note = (key: string, text: string, icon?: RenderChildren, isOneLine = false) =>
       vector ? (
         <Box key={key} flexDirection="row" gap={1} width={columns}>
-          {kit.blank('Detail')}
+          {kit.blank()}
           {icon}
           <Box flexShrink={1} minWidth={0}>
             <Text dimColor wrap={isOneLine ? 'truncate-end' : 'wrap'}>
@@ -3070,7 +3082,7 @@ export function registerGlance(on: On): void {
               </Box>
             </Box>
             <Box key="details" flexDirection="row" gap={1} width={columns}>
-              {kit.blank('Detail')}
+              {kit.blank()}
               <Box flexShrink={1}>
                 <Text dimColor wrap="wrap">
                   {`${one.stepsDone} of ${one.stepsTotal} steps · ${[took, tokenNote(one.newTokens + one.cachedTokens, one.cachedTokens), typeof one.costUsd === 'number' ? formatCost(one.costUsd) : ''].filter(Boolean).join(' · ')}`}
@@ -3079,7 +3091,7 @@ export function registerGlance(on: On): void {
             </Box>
             {files !== '' && (
               <Box key="files" flexDirection="row" gap={1} width={columns}>
-                {kit.blank('Detail')}
+                {kit.blank()}
                 {kit.icon('file', 'quiet', 'Files', 13)}
                 <Box flexShrink={1}>
                   <Text dimColor wrap="wrap">
@@ -3438,16 +3450,19 @@ export function registerGlance(on: On): void {
         )}
       </Box>
     )
+    // The bold words of a header are never cut: the longest of the ways to say it that fits, else the shortest.
+    const leadOf = (ways: string[]) => ways.find(one => widthOf(one) <= headerWidth - 3) ?? ways[ways.length - 1] ?? ''
     // The header on vector surfaces: a mark, what is happening in bold, then the rest dim. Given as pieces, the rest
     // keeps whole pieces that fit and leaves the others out, as the Working header does.
-    const headline = (mark: RenderChildren, lead: string, rest: string | string[], look: { isRestPlain?: boolean } = {}) => {
-      const room = Math.max(0, headerWidth - 3 - widthOf(lead))
+    const headline = (mark: RenderChildren, lead: string | string[], rest: string | string[], look: { isRestPlain?: boolean } = {}) => {
+      const shownLead = leadOf(Array.isArray(lead) ? lead : [lead])
+      const room = Math.max(0, headerWidth - 3 - widthOf(shownLead))
       const shown = Array.isArray(rest) ? wholePieces(rest, room - 3) : fit(rest, room).trimEnd()
       return (
         <Box flexDirection="row" alignItems="center" gap={1}>
           {mark}
           <Text wrap="truncate-end">
-            <Text bold>{fit(lead, headerWidth - 3).trimEnd()}</Text>
+            <Text bold>{shownLead}</Text>
             <Text dimColor={!look.isRestPlain}>{Array.isArray(rest) ? (shown === '' ? '' : ` · ${shown}`) : shown}</Text>
           </Text>
         </Box>
@@ -3466,11 +3481,11 @@ export function registerGlance(on: On): void {
               <Box flexDirection="row" alignItems="center" gap={1}>
                 {kit.icon('spark', 'active', 'Welcome')}
                 <Text bold wrap="truncate-end">
-                  Welcome to GlanceFlow
+                  {leadOf(['Welcome to GlanceFlow', 'Welcome'])}
                 </Text>
               </Box>,
             )}
-            {line('tour-text', kit.blank('Welcome'), <Text wrap="wrap">{TOUR_VECTOR[tourStep]}</Text>)}
+            {line('tour-text', kit.blank(), <Text wrap="wrap">{TOUR_VECTOR[tourStep]}</Text>)}
             {warnings}
             <Box key="tour" flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2} rowGap={1} flexWrap="wrap" width={columns} marginTop={1}>
               <Box flexDirection="row" alignItems="center" columnGap={1}>
@@ -3606,7 +3621,11 @@ export function registerGlance(on: On): void {
     } else if (list.phase === 'background') {
       const running = list.helpers.filter(one => one.status === 'running').length
       header = vector ? (
-        headline(kit.icon('clock', 'active', STATUS), 'Still working in the background', [`${running} left`, list.title, elapsed])
+        headline(
+          kit.icon('clock', 'active', STATUS),
+          ['Still working in the background', 'In the background', 'Background'],
+          [`${running} left`, list.title, elapsed],
+        )
       ) : (
         <Text wrap="truncate-end" color="cyan" bold={isCalm}>
           {fit(`◷ Still working in the background · ${running} left · ${list.title} · ${elapsed}`, headerWidth).trimEnd()}
@@ -3734,7 +3753,7 @@ export function registerGlance(on: On): void {
       vector ? (
         line(
           key,
-          kit.blank('Detail'),
+          kit.blank(),
           <Text dimColor wrap="truncate-end">
             {wholePieces(text.split(' · '), roomFor(0))}
           </Text>,
@@ -4006,7 +4025,7 @@ export function registerGlance(on: On): void {
             isActive: isRunning,
             element: line(
               helperKey,
-              kit.blank('Helper'),
+              kit.blank(),
               <Box flexDirection="row" alignItems="center" gap={1}>
                 {isRunning
                   ? kit.ring(null, isCalm ? 0 : tick, 'Running', 13)
