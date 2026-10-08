@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, asksQuestion, carryTokens, questionOf, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, asksQuestion, carryTokens, questionOf, isContinueWords, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
@@ -81,6 +81,13 @@ describe('clean names', () => {
 
   test('nothing left becomes a friendly placeholder', () => {
     expect(cleanName('`npm run build`')).toBe('Working on it')
+  })
+
+  test('a job named in Title Case reads in sentence case, names like GlanceFlow keep theirs', () => {
+    expect(sentenceCase('Copy Mod With Button Choices')).toBe('Copy mod with button choices')
+    expect(sentenceCase('Release GlanceFlow Update')).toBe('Release GlanceFlow update')
+    expect(sentenceCase('Build my landing page')).toBe('Build my landing page')
+    expect(sentenceCase('Fix PR')).toBe('Fix PR')
   })
 })
 

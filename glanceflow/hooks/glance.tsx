@@ -191,6 +191,16 @@ export function cleanName(raw: unknown, max = MAX_NAME): string {
   return `${(space > 0 ? cut.slice(0, space) : cut).replace(/[\s,;:.\-–]+$/, '')}…`
 }
 
+/**
+ * A name in Title Case ("Copy Mod With Button Choices") in the sentence case the checklist uses everywhere else. A
+ * word with a capital past its first letter (GlanceFlow, PR) keeps its case; a name already in sentence case stays.
+ */
+export function sentenceCase(name: string): string {
+  const words = name.split(' ')
+  if (words.length < 3 || words.some(word => /^\p{Ll}/u.test(word))) return name
+  return words.map((word, index) => (index === 0 || /\p{Lu}/u.test(word.slice(1)) ? word : word.toLowerCase())).join(' ')
+}
+
 function apiErrorSentence(kind: string, details = ''): string {
   if (/too long|context (window|length|limit)|max(imum)? context/i.test(details)) {
     return 'type /compact and try again'
@@ -941,14 +951,15 @@ const nameJob = async ($: $, text: string, jobId: string) => {
       timeoutMs: 15000,
       prompt:
         'Name this request in 2 to 6 plain English words that start with a verb, ' +
-        'like "Build my landing page". Always in English, even when the request is in another language. ' +
+        'like "Build my landing page", in sentence case: only the first word and names get a capital. ' +
+        'Always in English, even when the request is in another language. ' +
         'No file names, code, quotes or punctuation. ' +
         `Reply with the name only.\n\nRequest:\n${text.slice(0, 2000)}`,
     })
     if (!answer.isAnswered) {
       return
     }
-    const title = cleanName((answer.text.split('\n')[0] ?? '').replace(/["'.]/g, ''))
+    const title = sentenceCase(cleanName((answer.text.split('\n')[0] ?? '').replace(/["'.]/g, '')))
     await change($, list => (list.jobId === jobId ? { ...list, title } : list))
   } catch {
     // The placeholder title stays.
@@ -3307,8 +3318,8 @@ export function registerGlance(on: On): void {
     // wrapping onto a second line when the band is narrow.
     const actions =
       actionItems === null ? null : vector ? (
-        <Box key="actions" flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2} flexWrap="wrap" width={columns} marginTop={1}>
-          <Box flexDirection="row" alignItems="center" columnGap={1} flexWrap="wrap" flexShrink={1} minWidth={0}>
+        <Box key="actions" flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2} rowGap={1} flexWrap="wrap" width={columns} marginTop={1}>
+          <Box flexDirection="row" alignItems="center" columnGap={1} rowGap={1} flexWrap="wrap" flexShrink={1} minWidth={0}>
             {places}
           </Box>
           <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
