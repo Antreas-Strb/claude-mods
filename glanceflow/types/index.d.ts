@@ -54,6 +54,8 @@ export type GlanceChecklist = {
   phase: GlancePhase
   tasks: GlanceTask[]
   needsYouReason: string | null
+  /** What Claude asked, in its own words, when the turn ended on a question; shown in place of the general reason. */
+  question?: string | null
   stuckReason: string | null
   startedAt: number
   finishedAt: number | null

@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, asksQuestion, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, asksQuestion, carryTokens, questionOf, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
@@ -399,7 +399,7 @@ test('a finished job that ends with a question says Needs you and chimes, not Al
 
   const shown = (await texts($, 'terminal')).join('\n')
   expect(shown).toContain('Needs you')
-  expect(shown).toContain("Answer Claude's question in the chat")
+  expect(shown).toContain('Do you want me to deploy it?')
   expect(shown).not.toContain('All done')
   expect(shown).not.toContain('‖ Pause')
   expect(heard).toEqual(['sounds/needs-you.wav'])
@@ -429,6 +429,81 @@ test('the reply to that question starts a new job, and the History keeps the fir
   const pane = (await paneTexts($)).join('\n')
   expect(pane).toContain('Build my landing page')
   expect(pane).toContain('Total: 1 task · 1 done')
+})
+
+test('the question shown is Claude\'s last sentence, plain and short, with secrets masked', () => {
+  expect(questionOf('The page is ready. Do you want me to deploy it?')).toBe('Do you want me to deploy it?')
+  expect(questionOf('Έτοιμο. Να το ανεβάσω στο Vercel;')).toBe('Να το ανεβάσω στο Vercel;')
+  expect(questionOf('Two options:\n\n1. Postgres\n2. SQLite\n\n**Which do you prefer?**')).toBe('Which do you prefer?')
+  // A last sentence of a few words keeps its paragraph, so it still makes sense alone.
+  expect(questionOf('Both pass locally and in CI. Merge? ')).toBe('Both pass locally and in CI. Merge?')
+  expect(questionOf('Should I use the key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 for this call?')).not.toContain('abcdefghijkl')
+  expect(questionOf(`Do you want ${'a very long thing '.repeat(20)}done?`)?.length).toBeLessThanOrEqual(160)
+  expect(questionOf('The page is ready.')).toBeNull()
+  expect(questionOf('')).toBeNull()
+})
+
+test('Needs you says what Claude asked, and the general reason comes back when it did not ask', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Do it', 'Check it', 'Ship it'] })
+  await $.turn.complete({ answer: 'Two colours fit. Which colour should the buttons be?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  let shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Which colour should the buttons be?')
+  expect(shown).not.toContain('Reply to Claude in the box below')
+  expect(shown).toContain('▶ Continue')
+
+  // Claude asks for a permission next: the question does not stay on the line.
+  await $.turn.start({ text: 'Blue', turnId: 't2' })
+  await $.classic.Notification({ message: 'Claude needs your permission', notification_type: 'permission_prompt' } as never)
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain("Answer Claude's request in the chat")
+  expect(shown).not.toContain('Which colour')
+
+  // A turn that ends with steps left and no question keeps the general words.
+  await callTool($, { tool: 'Bash', command: 'ls' })
+  await $.turn.complete({ answer: 'Paused here for now.', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' })
+  shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Reply to Claude in the box below')
+})
+
+test('a question prompt from the app replaces an earlier question on the line', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Do it', 'Check it'] })
+  await $.turn.complete({ answer: 'Which colour should the buttons be?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.classic.Notification({ message: 'Claude has a question', notification_type: 'elicitation_dialog' } as never)
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain("Answer Claude's question in the chat")
+  expect(shown).not.toContain('Which colour')
+})
+
+test('the desktop notice carries the question too', async ($, on) => {
+  const { clock } = soundWorld(on)
+  const shown: string[][] = []
+  on('process.run', (_, e) => {
+    const argv = (e as { argv: readonly string[] }).argv
+    if (argv[0] === 'osascript') throw new Error('osascript: not found')
+    shown.push([...argv.slice(-2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+  })
+  await $.command.run({ command: 'glanceflow', args: 'notify on' } as never)
+  await clock.advance(1)
+  shown.length = 0
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await $.turn.complete({ answer: 'Postgres or SQLite, which do you prefer?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await clock.advance(1)
+  expect(shown).toEqual([['Claude needs you', 'Postgres or SQLite, which do you prefer?']])
+})
+
+test('while a plan waits for Start, the row offers Start and no Pause', async ($, on) => {
+  world(on)
+  await $.command.run({ command: 'glanceflow', args: 'approve on' } as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('▶ Start')
+  expect(shown).not.toContain('‖ Pause')
 })
 
 test('narrow headers drop the least important details first', () => {
@@ -564,7 +639,8 @@ test('Claude waiting for its own helper is not Needs you; it is when Claude wait
   await $.turn.complete({ answer: 'Shall I file the follow-ups?', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer' })
   shown = (await texts($, 'terminal')).join('\n')
   expect(shown).toContain('Needs you')
-  expect(shown).toContain('Reply to Claude in the box below')
+  expect(shown).toContain('Shall I file the follow-ups?')
+  expect(shown).toContain('▶ Continue')
 })
 
 test('a background shell Claude waits for is not Needs you either', async ($, on) => {

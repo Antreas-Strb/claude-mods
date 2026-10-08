@@ -543,6 +543,18 @@ export function asksQuestion(answer: string): boolean {
   return /[?;？؟]$/.test(answer.trimEnd().replace(/[*_"'”»)\s]+$/g, ''))
 }
 
+const MAX_QUESTION = 160
+
+/** The question Claude ended on, as one plain line: its last sentence, or the whole last paragraph when that sentence is a few words. */
+export function questionOf(answer: string): string | null {
+  if (!asksQuestion(answer)) return null
+  const paragraph = (answer.trim().split(/\n\s*\n/).pop() ?? '').replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim()
+  const last = paragraph.split(/(?<=[.!?;？؟])\s+/).pop() ?? ''
+  const line = maskPrivate(last.length >= 12 ? last : paragraph)
+
+  return line === '' ? null : line.length > MAX_QUESTION ? `${line.slice(0, MAX_QUESTION - 1)}…` : line
+}
+
 /** True when the text has no letters outside the Latin alphabet, so it can stand as an English title. */
 export function isLatinText(text: string): boolean {
   return !/(?!\p{Script=Latin})\p{L}/u.test(text)
@@ -776,7 +788,7 @@ const showNotice = async ($: $, title: string, body: string) => {
 
 /** What the notice says under its title: why Claude waits or is stuck, or the job's name. */
 const noticeBody = (list: GlanceChecklist) =>
-  (list.phase === 'needsYou' ? list.needsYouReason : list.phase === 'stuck' ? list.stuckReason : null) ?? list.title
+  (list.phase === 'needsYou' ? needsText(list) : list.phase === 'stuck' ? list.stuckReason : null) ?? list.title
 
 /** A desktop notice when Claude needs you, gets stuck or finishes a long job, as for the sounds. */
 const noticeFor = async ($: $, list: GlanceChecklist) => {
@@ -937,16 +949,20 @@ const nameJob = async ($: $, text: string, jobId: string) => {
 const setWorking = ($: $) =>
   change($, list =>
     list.approval !== 'waiting' && (list.phase === 'needsYou' || list.phase === 'stuck')
-      ? { ...list, phase: 'working', needsYouReason: null, stuckReason: null }
+      ? { ...list, phase: 'working', needsYouReason: null, question: null, stuckReason: null }
       : list,
   )
 
 /** A job that ended: All done, or finished with a question for the person (Needs you, with a finish time). */
 const isFinished = (list: GlanceChecklist) => list.phase === 'done' || (list.phase === 'needsYou' && list.finishedAt !== null)
 
+/** Why the person is needed: what Claude asked, when it ended on a question, else the general reason. */
+const needsText = (list: GlanceChecklist) =>
+  (list.question && (list.needsYouReason === WAITING || list.needsYouReason === QUESTION) ? list.question : list.needsYouReason) ?? null
+
 const setNeedsYou = ($: $, reason: string) =>
   change($, list =>
-    list.phase === 'done' || list.phase === 'stopped' ? list : { ...list, phase: 'needsYou', needsYouReason: reason },
+    list.phase === 'done' || list.phase === 'stopped' ? list : { ...list, phase: 'needsYou', needsYouReason: reason, question: null },
   )
 
 /** Claude wrote or edited a file: the current step keeps it, created or changed, once. */
@@ -2117,8 +2133,11 @@ export function registerGlance(on: On): void {
         await change($, current => ({ ...current, phase: 'stopped', stopKind: 'esc', needsYouReason: null, finishedAt: finished }))
       } else if (list.hasPlan && hasUnfinishedWork(list.tasks)) {
         // A helper still running means Claude waits for it, not for the person.
+        const asked = questionOf(e.answer ?? '')
         await change($, current =>
-          isBusy(current) ? current : { ...current, phase: 'needsYou', needsYouReason: current.approval === 'waiting' ? APPROVE : WAITING },
+          isBusy(current)
+            ? current
+            : { ...current, phase: 'needsYou', needsYouReason: current.approval === 'waiting' ? APPROVE : WAITING, question: asked },
         )
       } else {
         await change($, current => ({
@@ -2127,11 +2146,13 @@ export function registerGlance(on: On): void {
           tasks: current.hasPlan ? current.tasks : carryTokens(current.tasks, [task('Answer your question', 'done')]),
         }))
         // A finished job whose last message asks something still waits for the person.
+        const asked = questionOf(e.answer ?? '')
         const isAsking = asksQuestion(e.answer ?? '')
         await change($, current => ({
           ...current,
           phase: isAsking ? 'needsYou' : 'done',
           needsYouReason: isAsking ? QUESTION : null,
+          question: asked,
           stuckReason: null,
           finishedAt: finished,
           tasks: current.tasks.map(one => ({ ...one, status: 'done' as const, percent: 100, hasReported: true })),
@@ -2395,7 +2416,7 @@ export function registerGlance(on: On): void {
     const grew = list.plannedCount > 0 && list.tasks.length > list.plannedCount ? ` · plan grew ${list.plannedCount} → ${list.tasks.length}` : ''
     const status =
       list.phase === 'needsYou'
-        ? { color: 'yellow', text: `Needs you: ${list.needsYouReason ?? WAITING}` }
+        ? { color: 'yellow', text: `Needs you: ${needsText(list) ?? WAITING}` }
         : list.phase === 'stuck'
           ? { color: 'yellow', text: `Stuck: ${list.stuckReason ?? 'Claude can\'t go on right now'}` }
           : list.phase === 'stopped'
@@ -2756,7 +2777,8 @@ export function registerGlance(on: On): void {
       runningTurn !== undefined &&
       list0 !== null &&
       (list0.phase === 'working' || list0.phase === 'needsYou') &&
-      list0.needsYouReason !== WAITING
+      list0.needsYouReason !== WAITING &&
+      list0.approval !== 'waiting'
     const canContinue =
       list0 !== null &&
       (list0.phase === 'stopped' || list0.phase === 'stuck' || (list0.phase === 'needsYou' && list0.needsYouReason === WAITING))
@@ -2926,7 +2948,7 @@ export function registerGlance(on: On): void {
           <Text bold inverse color="yellow">
             {' Needs you '}
           </Text>
-          <Text> {fit(list.needsYouReason ?? PERMISSION, headerWidth - 12).trimEnd()}</Text>
+          <Text> {fit(needsText(list) ?? PERMISSION, headerWidth - 12).trimEnd()}</Text>
         </Text>
       )
     } else if (list.phase === 'stuck') {
