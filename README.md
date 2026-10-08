@@ -159,6 +159,10 @@ The button above the prompt cycles Simple, Details and Off.
 - Background tasks are checked at the end of each of Claude's replies.
 - Each new job gets a short English name from Haiku in the background: one small model request per job.
 
+## Questions and ideas
+
+Ask a question, suggest a feature or show how you use it in [Discussions](https://github.com/Antreas-Strb/glanceflow/discussions). For a clear bug, [open an issue](https://github.com/Antreas-Strb/glanceflow/issues/new).
+
 ## Credits
 
 The secret and personal-detail patterns in `glanceflow/hooks/privacy.ts` are adapted from [Nate Herk's Recording Mode](https://github.com/nateherkai/claude-code-mods) (MIT licence). The overall progress and time-left idea comes from his Goal Meter.
