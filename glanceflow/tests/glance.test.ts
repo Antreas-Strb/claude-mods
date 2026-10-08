@@ -401,6 +401,7 @@ test('a last message that asks something is a question, in English or Greek', ()
   expect(asksQuestion('Τελείωσε. Δεν χρειάζεται κάτι άλλο.')).toBe(false)
   expect(asksQuestion('Added the line:\n```js\nconst a = 1;\n```')).toBe(false)
   expect(asksQuestion('')).toBe(false)
+  expect(asksQuestion('Kept the old value for now;')).toBe(false)
 })
 
 test('a finished job that ends with a question says Needs you and chimes, not All done', async ($, on) => {

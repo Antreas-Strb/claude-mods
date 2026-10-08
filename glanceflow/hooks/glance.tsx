@@ -558,9 +558,13 @@ export function isStartWords(text: string): boolean {
   return /^(start|go|go ahead|ok|okay|yes|looks good|approved?|ξεκίνα|ξεκινα|ναι|οκ|εντάξει|ενταξει)( please)?$/.test(words)
 }
 
-/** Claude's last message ends by asking the person something. Greek writes its question mark as ";", so both count; a code block never does. */
+/**
+ * Claude's last message ends by asking the person something. Greek writes its question mark as ";", so a ";" counts
+ * in Greek text and nowhere else; a code block never does.
+ */
 export function asksQuestion(answer: string): boolean {
-  return /[?;？؟]$/.test(answer.trimEnd().replace(/[*_"'”»)\s]+$/g, ''))
+  const end = answer.trimEnd().replace(/[*_"'”»)\s]+$/g, '')
+  return /[?？؟]$/.test(end) || (end.endsWith(';') && /\p{Script=Greek}/u.test(end))
 }
 
 const MAX_QUESTION = 160
