@@ -5,3 +5,5 @@
 brag-output*/
 .agents/
 glanceflow/CLAUDE.md
+# abide's local state (rule checks); its rules live in ~/.abide
+.abide/
