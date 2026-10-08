@@ -57,7 +57,7 @@ const TOUR_KEY = 'glanceTour'
 const TOUR = [
   'A checklist shows here when you ask Claude for something with a few steps: each step, how far along it is, and about how long is left.',
   'When Claude needs you, the checklist says Needs you in yellow, and what to do. Turn on sounds or desktop notices in ⚙ Settings to hear or see it from another app.',
-  '⚙ Settings below holds every choice. ☰ History shows your past jobs and Your week. To see this welcome again, type /glanceflow tour.',
+  '⚙ Settings below holds every choice. ≣ History shows your past jobs and Your week. To see this welcome again, type /glanceflow tour.',
 ]
 const HANDOFF_KEY = 'lastHandoff'
 const MAX_NAME = 40
@@ -2576,7 +2576,8 @@ export function registerGlance(on: On): void {
         {'Select' in table && table.Select ? (
           <table.Select
             key="day"
-            label="Day: "
+            // The terminal's Select draws "label: value" itself, so the label carries no colon.
+            label="Day"
             value={view.day}
             options={view.days.map(day => ({ value: day, label: dayLabel(day) }))}
             onSelect={day => void showHistory($, day, false)}
@@ -2755,7 +2756,8 @@ export function registerGlance(on: On): void {
         {list0?.approval === 'waiting' && <Button key="start" plain label="▶ Start" onPress={() => startPlan($)} />}
         {canContinue && <Button key="continue" plain label="▶ Continue" onPress={() => continueJob($)} />}
         {list0?.hasPlan && <Button key="plan" plain label="▤ Plan" onPress={() => showPlan($)} />}
-        <Button key="history" plain label="☰ History" onPress={() => showHistory($, dayKey(current), true)} />
+        {/* ≣, not ☰: Unicode 16 made ☰ two cells wide, and the row shifted in newer terminals. */}
+        <Button key="history" plain label="≣ History" onPress={() => showHistory($, dayKey(current), true)} />
         <Button key="settings" plain label={columns < 60 ? '⚙' : '⚙ Settings'} onPress={() => showSettings($)} />
         {list0 !== null && (
         <Button

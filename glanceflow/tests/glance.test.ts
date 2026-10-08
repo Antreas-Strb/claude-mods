@@ -942,7 +942,7 @@ test('before any work the band says where the plan will show, without a Fresh ch
   world(on)
   const shown = (await texts($, 'terminal')).join('\n')
   expect(shown).toContain("Ask Claude for something: its plan shows here")
-  expect(shown).toContain('☰ History')
+  expect(shown).toContain('≣ History')
   expect(shown).not.toContain('Fresh chat')
 })
 
@@ -1027,12 +1027,32 @@ test('the band has History and Fresh chat buttons while GlanceFlow is on', async
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
-    expect(shown).toContain('☰ History')
+    expect(shown).toContain('≣ History')
     expect(shown).toContain('↻ Fresh chat')
   }
   await $.command.run({ command: 'glanceflow', args: 'off' } as never)
   const off = (await texts($, 'terminal')).join('\n')
-  expect(off).not.toContain('☰ History')
+  expect(off).not.toContain('≣ History')
+})
+
+/** Symbols Unicode 16 draws two cells wide (East Asian Width W) while Claude Code counts one, so a row holding one shifts. */
+const WIDE_SYMBOLS =
+  /[⌚-⌛〈-〉⏩-⏬⏰⏳◽-◾☔-☕☰-☷♈-♓♿⚊-⚏⚓⚡⚪-⚫⚽-⚾⛄-⛅⛎⛔⛪⛲-⛳⛵⛺⛽✅✊-✋✨❌❎❓-❕❗➕-➗➰➿⬛-⬜⭐⭕]/
+
+test('the band and History draw only symbols every terminal counts as one cell', async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  const shown = [...(await texts($, 'terminal')), ...(await paneTexts($))]
+  expect(shown.filter(text => WIDE_SYMBOLS.test(text))).toEqual([])
+
+  // The day picker's label has no colon of its own; the terminal draws "Day: Today, …".
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const [day] = await ui.findAll({ type: 'Select' })
+  await ui.unmount()
+  expect((day?.props as { label?: string } | undefined)?.label).toBe('Day')
 })
 
 test('the History button opens the panel; the day picker moves between days', async ($, on) => {
@@ -1907,7 +1927,7 @@ test('someone new gets a three-card welcome once; /glanceflow tour shows it agai
   const shown = (await texts($, 'terminal', 120)).join('\n')
   expect(shown).toContain('Welcome to GlanceFlow · 1 of 3')
   expect(shown).toContain('A checklist shows here when you ask Claude')
-  expect(shown).toContain('☰ History')
+  expect(shown).toContain('≣ History')
   for (const card of ['2 of 3', '3 of 3']) {
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
     await band.press({ key: 'tour-next' })

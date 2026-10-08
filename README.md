@@ -57,7 +57,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A step that runs past its usual time says `taking longer` instead of a guess, and the total waits until it can be estimated again. A plan of more than five steps folds its finished steps, and the steps after the next one, into a line each; **▤ Plan** shows them all.
 - **What Claude is doing right now:** a quiet line under the current step says it in one whole sentence: Claude's own description when it fits, like `Now: Check the page on a phone screen`, otherwise a short phrase like `Reading files (3)` or `Running the tests`. No file names or commands.
 - **What each step got done:** when a step is checked off, Claude adds one plain-English line on what it did ("Added a pricing table with three plans"). It shows under the step until Claude moves on, and goes into the History and the Team report.
-- **Which files changed:** **▤ Plan** lists under each step the files Claude added or changed in it (`Added contact.html · changed styles.css and index.html`), helpers' edits included, and ☰ History shows them under each job. Names only; the folder shows where two files share a name.
+- **Which files changed:** **▤ Plan** lists under each step the files Claude added or changed in it (`Added contact.html · changed styles.css and index.html`), helpers' edits included, and ≣ History shows them under each job. Names only; the folder shows where two files share a name.
 - **Sounds, if you want them:** `/glanceflow sound on` plays a short chime when Claude needs you, gets stuck, or finishes a job that took over a minute, so you can look away. `/glanceflow sound voice` also says it ("Claude needs you"). Off by default (turn it on in ⚙ Settings). Works on macOS, Windows and Linux; on Linux it uses the sound player the computer has (PipeWire, PulseAudio or ALSA) and, for the words, speech-dispatcher or eSpeak.
 - **Desktop notices, if you want them:** `/glanceflow notify on` shows a notice from your computer when Claude needs you, gets stuck, or finishes a job that took over a minute, with the reason in it. You see it even while you work in another app. Off by default (turn it on in ⚙ Settings). Works on macOS, Windows and Linux.
 - **Calm mode:** `/glanceflow calm on` stops everything that moves (the sweeping bar, the helper spinners) and shows statuses in bold.
@@ -92,7 +92,7 @@ The checklist also survives closing Claude Code: resume the chat (`claude --resu
 
 ## History for a retro
 
-**☰ History** under the checklist (or `/glanceflow history`) opens a side panel with today's jobs in this project: when each started, how it ended (✓ done, ■ stopped, ⚠ stuck), steps done, how long it took and its tokens, the files it added or changed, with the day's totals at the bottom.
+**≣ History** under the checklist (or `/glanceflow history`) opens a side panel with today's jobs in this project: when each started, how it ended (✓ done, ■ stopped, ⚠ stuck), steps done, how long it took and its tokens, the files it added or changed, with the day's totals at the bottom.
 
 ![The History panel: the day's jobs with start time, outcome, steps, time and tokens, the day picker and the totals](docs/glance-history.png)
 
