@@ -65,7 +65,8 @@ type Drawn = { type: string; props: Record<string, unknown>; children?: (Drawn |
 
 /** Marks a screen reader would say twice: an alt its row's words hold, or one another mark in the row has. */
 function echoes(boxes: unknown[]): string[] {
-  const textOf = (node: Drawn | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
+  // Each element's words apart, as they are drawn: a name and the line under it are two runs of words, not one.
+  const textOf = (node: Drawn | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join('\n'))
   const altsOf = (node: Drawn | string): string[] =>
     typeof node === 'string' ? [] : node.type === 'Svg' ? [String(node.props.alt)] : (node.children ?? []).flatMap(altsOf)
   const found = (boxes as Drawn[])
@@ -1487,14 +1488,42 @@ test('in the Desktop app no mark says again what the words beside it say, in the
   expect(echoes(band)).toEqual([])
   expect(JSON.stringify(noticeOf(band))).toContain('"alt":"Notice"')
 
-  // History with nothing saved says so in words; its mark says History.
+  // History with nothing saved says so in words; its mark says Notice, History being the panel's title, read just before.
   await $.command.run({ command: 'glanceflow', args: 'history' } as never)
   const history = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const alts = (await history.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
   const words = (await history.findAll({ type: 'Text' })).map(one => one.text).join('\n')
   await history.unmount()
   expect(words).toContain('No tasks saved')
-  expect(alts).toEqual(['History'])
+  expect(alts).toEqual(['Notice'])
+})
+
+test("in the Desktop app a panel's marks say neither its title nor the words beside them: Settings, Where we left off, an empty Plan", async ($, on) => {
+  world(on)
+  const read = async (requestId: string, title: string) => {
+    const ui = await $.ui.mount({ ...PANE, requestId, props: { ...PANE.props, title }, surface: 'desktop' } as never)
+    const boxes = await ui.findAll({ type: 'Box' })
+    const alts = (await ui.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
+    await ui.unmount()
+    return { echoes: echoes(boxes), alts, titled: alts.filter(alt => title.toLowerCase().includes(alt.toLowerCase())) }
+  }
+
+  // Each setting's mark says Setting; its name follows once, in bold.
+  const settings = await read('glanceflow-settings', 'GlanceFlow settings')
+  expect(settings.echoes).toEqual([])
+  expect(settings.alts.length > 0 && settings.alts.every(alt => alt === 'Setting')).toBe(true)
+
+  // With no checkpoint yet the words say so; the mark says Notice, not Checkpoint again.
+  const recap = await read('glanceflow-recap', 'Where we left off')
+  expect(recap.echoes).toEqual([])
+  expect(recap.titled).toEqual([])
+  expect(recap.alts).toEqual(['Notice'])
+
+  // An empty Plan: the panel's title says Plan, the words say there is none yet.
+  const plan = await read('glanceflow-plan', 'Plan')
+  expect(plan.echoes).toEqual([])
+  expect(plan.titled).toEqual([])
+  expect(plan.alts).toEqual(['Notice'])
 })
 
 test('in the Desktop app a header keeps whole pieces: what has no room is left out, never cut mid-word', async ($, on) => {

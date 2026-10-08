@@ -103,7 +103,8 @@ const QUESTION = "Answer Claude's question in the chat"
 const WAITING = 'Reply to Claude in the box below'
 // What a mark beside a state's own bold word says: the word follows, so a screen reader hears it once, not twice.
 const STATUS = 'Status'
-// What a mark beside a notice says: a usage limit, a full chat, a tidy-up. The words beside it say which.
+// What a mark beside a notice says: a usage limit, a full chat, a tidy-up, a panel with nothing in it yet. The words
+// beside it say which; a panel's own name is its title's, read just before.
 const NOTICE = 'Notice'
 const APPROVE = 'Read the plan, then press Start or tell Claude what to change'
 
@@ -2383,8 +2384,9 @@ export function registerGlance(on: On): void {
     const group = (key: string, icon: IconName, title: string, picked: string, control: RenderChildren, help: string, extra?: RenderChildren) =>
       vector ? (
         // A settings row as the Mac draws one: the name on the left, its menu on the right, what it does below.
+        // Its mark says Setting: the name follows in bold, so a screen reader hears it once.
         <Box key={key} flexDirection="row" gap={1} marginTop={2} width={columns}>
-          {kit.icon(icon, 'quiet', title)}
+          {kit.icon(icon, 'quiet', 'Setting')}
           <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} gap={Select ? 0 : 1}>
             <Box flexDirection={Select ? 'row' : 'column'} alignItems={Select ? 'center' : undefined} justifyContent="space-between" columnGap={2} rowGap={1}>
               <Text bold>{title}</Text>
@@ -2557,7 +2559,7 @@ export function registerGlance(on: On): void {
     const lead = (words: string) =>
       vector ? (
         <Box key="lead" flexDirection="row" gap={1} width={columns}>
-          {kit.icon('bookmark', 'quiet', 'Checkpoint')}
+          {kit.icon('bookmark', 'quiet', NOTICE)}
           <Box flexShrink={1}>
             <Text dimColor wrap="wrap">
               {words}
@@ -2633,7 +2635,7 @@ export function registerGlance(on: On): void {
         <Box flexDirection="column">
           {vector ? (
             <Box flexDirection="row" gap={1}>
-              {kit.icon('plan', 'quiet', 'Plan')}
+              {kit.icon('plan', 'quiet', NOTICE)}
               <Text dimColor wrap="wrap">
                 {words}
               </Text>
@@ -3019,7 +3021,7 @@ export function registerGlance(on: On): void {
           {picker}
           {vector ? (
             <Box flexDirection="row" gap={1}>
-              {kit.icon('plan', 'quiet', 'History')}
+              {kit.icon('plan', 'quiet', NOTICE)}
               <Text dimColor wrap="wrap">
                 {words}
               </Text>
