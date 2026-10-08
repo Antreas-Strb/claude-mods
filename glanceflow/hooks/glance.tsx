@@ -1485,6 +1485,7 @@ function kitOf(table: ElementTable, surface: RenderSurface) {
   const { Text } = table
   // The terminal's table answers for Svg too, and draws it as an empty box: go by the surface.
   const Svg = surface !== 'terminal' && 'Svg' in table ? table.Svg : null
+  // Every drawing says what it is: the desktop app draws nothing for an Svg whose alt is empty.
   const draw = (source: string, alt: string, width: number, height = width): RenderElement | null =>
     Svg ? <Svg source={source} alt={alt} width={width} height={height} /> : null
   const glyph = (name: IconName, tone: Tone) => (
@@ -1506,7 +1507,7 @@ function kitOf(table: ElementTable, surface: RenderSurface) {
     /** A step still to come. */
     open: (alt: string, size = ICON) => draw(openRingSvg(size, LINE), alt, size, LINE) ?? <Text dimColor>○</Text>,
     /** Room the size of an icon, so a line under a step starts where the step's name does. */
-    blank: (size = ICON) => draw(blankSvg(size, LINE), '', size, LINE) ?? <Text> </Text>,
+    blank: (alt: string, size = ICON) => draw(blankSvg(size, LINE), alt, size, LINE) ?? <Text> </Text>,
     /** A slim bar; vector surfaces only. */
     meter: (tone: Tone, percent: number | null, sweep: number, alt: string, width = 96) => draw(meterSvg(tone, width, percent, sweep), alt, width, 6),
     /** Where the welcome cards are; vector surfaces only. */
@@ -2281,7 +2282,7 @@ export function registerGlance(on: On): void {
     const group = (key: string, icon: IconName, title: string, picked: string, control: RenderChildren, help: string, extra?: RenderChildren) =>
       vector ? (
         <Box key={key} flexDirection="row" gap={1} marginTop={2} width={columns}>
-          {kit.icon(icon, 'quiet', '')}
+          {kit.icon(icon, 'quiet', title)}
           <Box flexDirection="column" flexGrow={1} flexShrink={1} gap={1}>
             <Text bold>{title}</Text>
             {control}
@@ -2454,7 +2455,7 @@ export function registerGlance(on: On): void {
     const lead = (words: string) =>
       vector ? (
         <Box key="lead" flexDirection="row" gap={1} width={columns}>
-          {kit.icon('bookmark', 'quiet', '')}
+          {kit.icon('bookmark', 'quiet', 'Checkpoint')}
           <Box flexShrink={1}>
             <Text dimColor wrap="wrap">
               {words}
@@ -2530,7 +2531,7 @@ export function registerGlance(on: On): void {
         <Box flexDirection="column">
           {vector ? (
             <Box flexDirection="row" gap={1}>
-              {kit.icon('plan', 'quiet', '')}
+              {kit.icon('plan', 'quiet', 'No plan yet')}
               <Text dimColor wrap="wrap">
                 {words}
               </Text>
@@ -2619,14 +2620,14 @@ export function registerGlance(on: On): void {
           )}
         </Box>
       )
-    // A line under a step, in line with its name.
-    const note = (key: string, text: string, icon?: RenderChildren) =>
+    // A line under a step, in line with its name. A command keeps to one line, cut at the edge.
+    const note = (key: string, text: string, icon?: RenderChildren, isOneLine = false) =>
       vector ? (
         <Box key={key} flexDirection="row" gap={1} width={columns}>
-          {kit.blank()}
+          {kit.blank('Detail')}
           {icon}
-          <Box flexShrink={1}>
-            <Text dimColor wrap="wrap">
+          <Box flexShrink={1} minWidth={0}>
+            <Text dimColor wrap={isOneLine ? 'truncate-end' : 'wrap'}>
               {text}
             </Text>
           </Box>
@@ -2660,7 +2661,7 @@ export function registerGlance(on: On): void {
         })
     const tokensOf = (one: GlanceTask) => (isDetailed ? tokenNote(one.tokens, one.cachedTokens) : '')
     const filesOf = (key: string, one: GlanceTask, suffix = '') =>
-      one.files?.length ? [note(`${key}-files`, `${filesNote(one.files)}${suffix}`, vector ? kit.icon('file', 'quiet', '', 13) : undefined)] : []
+      one.files?.length ? [note(`${key}-files`, `${filesNote(one.files)}${suffix}`, vector ? kit.icon('file', 'quiet', 'Files', 13) : undefined)] : []
 
     const done: RenderChildren[] = []
     const now_: RenderChildren[] = []
@@ -2703,7 +2704,7 @@ export function registerGlance(on: On): void {
                   `${vector ? '' : 'Now: '}${list.activity.detail ?? list.activity.label}${list.activity.count > 1 ? ` (${list.activity.label.toLowerCase()}, ${list.activity.count} in a row)` : ''}`,
                 ),
                 ...(isDetailed && list.activity.target && !(vector && one.files?.some(file => file.path.split('/').pop() === list.activity!.target))
-                  ? [note(`${key}-target`, vector ? list.activity.target : `↳ ${list.activity.target}`, vector ? kit.icon('sub', 'quiet', '', 13) : undefined)]
+                  ? [note(`${key}-target`, vector ? list.activity.target : `↳ ${list.activity.target}`, vector ? kit.icon('sub', 'quiet', 'Runs', 13) : undefined, true)]
                   : []),
               ]
             : []),
@@ -2779,7 +2780,7 @@ export function registerGlance(on: On): void {
         {status &&
           (vector ? (
             <Box key="status" flexDirection="row" gap={1} marginTop={1}>
-              {status.tone === 'active' ? kit.icon(status.icon, status.tone, '') : kit.badge(status.icon, status.tone, '')}
+              {status.tone === 'active' ? kit.icon(status.icon, status.tone, status.lead) : kit.badge(status.icon, status.tone, status.lead)}
               <Box flexShrink={1}>
                 <Text wrap="wrap">
                   <Text bold color={status.color}>
@@ -2913,7 +2914,7 @@ export function registerGlance(on: On): void {
           {picker}
           {vector ? (
             <Box flexDirection="row" gap={1}>
-              {kit.icon('plan', 'quiet', '')}
+              {kit.icon('plan', 'quiet', 'Nothing saved')}
               <Text dimColor wrap="wrap">
                 {words}
               </Text>
@@ -2967,7 +2968,7 @@ export function registerGlance(on: On): void {
           <Box key={`job-${one.jobId}`} flexDirection="column" marginBottom={1}>
             <Box key="row" flexDirection="row" gap={1} width={columns}>
               {outcomeMark(one.outcome)}
-              <Box flexGrow={1} flexShrink={1}>
+              <Box flexGrow={1} flexShrink={1} minWidth={0}>
                 <Text bold={one.outcome !== 'stopped'} dimColor={one.outcome === 'stopped'} wrap="truncate-end">
                   {one.title}
                 </Text>
@@ -2977,7 +2978,7 @@ export function registerGlance(on: On): void {
               </Box>
             </Box>
             <Box key="details" flexDirection="row" gap={1} width={columns}>
-              {kit.blank()}
+              {kit.blank('Detail')}
               <Box flexShrink={1}>
                 <Text dimColor wrap="wrap">
                   {`${one.stepsDone} of ${one.stepsTotal} steps · ${[took, tokenNote(one.newTokens + one.cachedTokens, one.cachedTokens), typeof one.costUsd === 'number' ? formatCost(one.costUsd) : ''].filter(Boolean).join(' · ')}`}
@@ -2986,8 +2987,8 @@ export function registerGlance(on: On): void {
             </Box>
             {files !== '' && (
               <Box key="files" flexDirection="row" gap={1} width={columns}>
-                {kit.blank()}
-                {kit.icon('file', 'quiet', '', 13)}
+                {kit.blank('Detail')}
+                {kit.icon('file', 'quiet', 'Files', 13)}
                 <Box flexShrink={1}>
                   <Text dimColor wrap="wrap">
                     {files}
@@ -3095,10 +3096,11 @@ export function registerGlance(on: On): void {
     const current = await now($)
 
     // A line of the band on vector surfaces: a mark, then what it says, then anything kept to the right.
+    // A box that holds a cut line needs minWidth 0: in the desktop app's flex rows, it would otherwise push past the edge.
     const line = (key: string, mark: RenderChildren, body: RenderChildren, right?: RenderChildren) => (
       <Box key={key} flexDirection="row" alignItems="center" gap={1} width={columns}>
         {mark}
-        <Box flexGrow={1} flexShrink={1}>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
           {body}
         </Box>
         {right}
@@ -3118,16 +3120,13 @@ export function registerGlance(on: On): void {
     const canContinue =
       list0 !== null &&
       (list0.phase === 'stopped' || list0.phase === 'stuck' || (list0.phase === 'needsYou' && list0.needsYouReason === WAITING))
-    // An action under the checklist: its glyph in the label on the terminal; elsewhere an icon beside a plain label,
-    // quiet until pointed at, save the one that matters now (Continue, Start): the band's one filled button.
+    // An action under the checklist: its glyph in the label on the terminal; elsewhere a plain label, quiet until
+    // pointed at, as the app's own buttons are, save the one that matters now (Continue, Start): the one filled button.
     const action = (key: string, icon: IconName, label: string, onPress: () => unknown, short?: string, isMain = false) =>
       vector && isMain ? (
         <Button key={key} variant="primary" label={label} onPress={onPress} />
       ) : vector ? (
-        <Box key={`${key}-item`} flexDirection="row" alignItems="center">
-          {kit.icon(icon, 'quiet', '', 14)}
-          <Button key={key} plain dimColor label={label} onPress={onPress} />
-        </Box>
+        <Button key={key} plain dimColor label={label} onPress={onPress} />
       ) : (
         <Button key={key} plain label={short ?? `${GLYPH[icon]} ${label}`} onPress={onPress} />
       )
@@ -3146,9 +3145,12 @@ export function registerGlance(on: On): void {
             action('handoff', 'fresh', handoffLabel, () => pressHandoff($), handoff === 'idle' && columns < 40 ? '↻ Fresh' : undefined),
         ].filter(Boolean)
       : null
+    const tidyAt = isEnabled ? await read($, tidyAtAtom) : 0
+    const isChatFull = usage.contextPercent !== null && tidyAt > 0 && usage.contextPercent >= tidyAt
     const usageParts = [
       ...usage.limits.map(one => `${one.label} ${Math.round(one.percent)}%`),
-      usage.contextPercent === null ? '' : `chat ${Math.round(usage.contextPercent)}% full`,
+      // The line below says how full the chat is, with the button to tidy it up: not twice.
+      usage.contextPercent === null || isChatFull ? '' : `chat ${Math.round(usage.contextPercent)}% full`,
     ].filter(Boolean)
     const top = usage.limitPercent ?? 0
     const isHigh = top >= LIMIT_WARN
@@ -3161,10 +3163,11 @@ export function registerGlance(on: On): void {
         : `Plan usage: ${usageParts.join(' · ')}`
       warnings.push(
         vector ? (
+          // The icon carries the colour, as the app's own notices do; the words stay plain.
           line(
             'limit',
-            kit.icon(isHigh ? 'alert' : 'clock', top >= LIMIT_ALERT ? 'alert' : isHigh ? 'warn' : 'quiet', ''),
-            <Text wrap="truncate-end" color={color} dimColor={!isHigh}>
+            kit.icon(isHigh ? 'alert' : 'clock', top >= LIMIT_ALERT ? 'alert' : isHigh ? 'warn' : 'quiet', isHigh ? 'Near a limit' : 'Plan usage'),
+            <Text wrap="truncate-end" dimColor={!isHigh}>
               {words}
             </Text>,
           )
@@ -3177,18 +3180,15 @@ export function registerGlance(on: On): void {
         ),
       )
     }
-    const tidyAt = isEnabled ? await read($, tidyAtAtom) : 0
-    if (usage.contextPercent !== null && tidyAt > 0 && usage.contextPercent >= tidyAt) {
+    if (isChatFull && usage.contextPercent !== null) {
       const words = `This chat is ${Math.round(usage.contextPercent)}% full. Claude saves a checkpoint before tidying up.`
       const tidy = <Button key="compact" label="Tidy it up" onPress={() => tidyUp($)} />
       warnings.push(
         vector ? (
           line(
             'long-chat',
-            kit.icon('tidy', 'warn', ''),
-            <Text wrap="truncate-end" color="yellow">
-              {words}
-            </Text>,
+            kit.icon('tidy', 'warn', 'Chat getting full'),
+            <Text wrap="truncate-end">{words}</Text>,
             tidy,
           )
         ) : (
@@ -3215,10 +3215,8 @@ export function registerGlance(on: On): void {
         vector ? (
           line(
             'recap',
-            kit.badge('check', 'ok', ''),
-            <Text wrap="truncate-end" color="green">
-              Chat tidied up. Claude kept a checkpoint of the work.
-            </Text>,
+            kit.badge('check', 'ok', 'Tidied up'),
+            <Text wrap="truncate-end">Chat tidied up. Claude kept a checkpoint of the work.</Text>,
             buttons,
           )
         ) : (
@@ -3234,9 +3232,9 @@ export function registerGlance(on: On): void {
       )
     }
 
-    // One button for every choice: Simple → Details → Off. Elsewhere than the terminal it is quiet, an icon and words,
-    // so the band's loudest thing is never the view it is in.
-    const toggle = (
+    // One button for every choice: Simple → Details → Off. Elsewhere than the terminal it is quiet, plain words, so
+    // the band's loudest thing is never the view it is in.
+    const button = (
       <Button
         key="toggle"
         label={
@@ -3264,14 +3262,6 @@ export function registerGlance(on: On): void {
         onPress={() => cycleMode($, isEnabled, isDetailed)}
       />
     )
-    const button = vector ? (
-      <Box key="toggle-item" flexDirection="row" alignItems="center" flexShrink={0}>
-        {kit.icon('eye', 'quiet', '', 14)}
-        {toggle}
-      </Box>
-    ) : (
-      toggle
-    )
     // The actions under the checklist. Elsewhere than the terminal the view toggle ends the row on the right, so the
     // header above is all status.
     // Where the row is too narrow to hold everything on one line, the toggle flows with the actions instead.
@@ -3293,18 +3283,18 @@ export function registerGlance(on: On): void {
     const headerWidth = Math.max(0, columns - (vector ? (hasToggleAbove ? 14 : 4) : columns < NARROW ? 15 : 27))
     const row = (header: RenderChildren) => (
       <Box key="header" flexDirection="row" justifyContent="space-between" alignItems={vector ? 'center' : undefined} width={columns}>
-        <Box flexShrink={1} flexGrow={1}>
+        <Box flexShrink={1} flexGrow={1} minWidth={0}>
           {header}
         </Box>
         {hasToggleAbove && button}
       </Box>
     )
     // The header on vector surfaces: a mark, what is happening in bold, then the rest dim.
-    const headline = (mark: RenderChildren, lead: string, rest: string, look: { color?: string; isRestPlain?: boolean; isLeadPlain?: boolean } = {}) => (
+    const headline = (mark: RenderChildren, lead: string, rest: string, look: { color?: string; isRestPlain?: boolean } = {}) => (
       <Box flexDirection="row" alignItems="center" gap={1}>
         {mark}
         <Text wrap="truncate-end">
-          <Text bold={!look.isLeadPlain} color={look.color}>
+          <Text bold color={look.color}>
             {fit(lead, headerWidth - 3).trimEnd()}
           </Text>
           <Text dimColor={!look.isRestPlain}>{fit(rest, Math.max(0, headerWidth - 3 - widthOf(lead))).trimEnd()}</Text>
@@ -3319,7 +3309,7 @@ export function registerGlance(on: On): void {
         return withBeneath(
           <Box flexDirection="column" width={columns}>
             <Box flexDirection="row" gap={1} width={columns}>
-              {kit.icon('spark', 'active', '')}
+              {kit.icon('spark', 'active', 'Welcome')}
               <Box flexDirection="column" flexGrow={1} flexShrink={1}>
                 <Text bold>Welcome to GlanceFlow</Text>
                 <Text wrap="wrap">{TOUR[tourStep]}</Text>
@@ -3363,8 +3353,8 @@ export function registerGlance(on: On): void {
         return withBeneath(
           <Box flexDirection="column" width={columns}>
             <Box key="header" flexDirection="row" alignItems="center" justifyContent="space-between" gap={2} width={columns}>
-              <Box flexDirection="row" alignItems="center" gap={1} flexShrink={1}>
-                {kit.icon('plan', 'quiet', '')}
+              <Box flexDirection="row" alignItems="center" gap={1} flexShrink={1} minWidth={0}>
+                {kit.icon('plan', 'quiet', 'No plan yet')}
                 <Text dimColor wrap="truncate-end">
                   {hint}
                 </Text>
@@ -3386,7 +3376,7 @@ export function registerGlance(on: On): void {
               <Text> </Text>
             ) : vector ? (
               <Box flexDirection="row" alignItems="center" gap={1}>
-                {kit.icon('plan', 'quiet', '')}
+                {kit.icon('plan', 'quiet', 'No plan yet')}
                 <Text dimColor wrap="truncate-end">
                   {fit(hint, headerWidth - 3).trimEnd()}
                 </Text>
@@ -3432,7 +3422,7 @@ export function registerGlance(on: On): void {
       const reason = needsText(list) ?? PERMISSION
       header = vector ? (
         <Box flexDirection="row" alignItems="center" gap={1}>
-          {kit.badge('bell', 'warn', '')}
+          {kit.badge('bell', 'warn', 'Needs you')}
           {/* The amber of the step's own mark, with dark words: one colour for waiting, legible on light and dark. */}
           <Text bold backgroundColor={TONE.warn} color="#1b1b1b">
             {' Needs you '}
@@ -3449,7 +3439,7 @@ export function registerGlance(on: On): void {
       )
     } else if (list.phase === 'stuck') {
       header = vector ? (
-        headline(kit.badge('bang', 'alert', ''), 'Stuck', isReasonOnStep ? ` · ${list.title}` : ` · ${reason} · ${list.title}`)
+        headline(kit.badge('bang', 'alert', 'Stuck'), 'Stuck', isReasonOnStep ? ` · ${list.title}` : ` · ${reason} · ${list.title}`)
       ) : (
         <Text wrap="truncate-end" color="yellow" bold={isCalm}>
           {fit(`⚠ Stuck: ${list.stuckReason ?? FAILING}`, headerWidth).trimEnd()}
@@ -3459,7 +3449,7 @@ export function registerGlance(on: On): void {
       const isPause = list.stopKind === 'pause'
       header = vector ? (
         headline(
-          kit.badge(isPause ? 'pause' : 'stop', 'quiet', ''),
+          kit.badge(isPause ? 'pause' : 'stop', 'quiet', isPause ? 'Paused' : 'Stopped'),
           isPause ? 'Paused' : 'Stopped',
           isReasonOnStep ? ` · ${list.title}` : ` · ${reason} · ${list.title}`,
         )
@@ -3474,7 +3464,7 @@ export function registerGlance(on: On): void {
     } else if (list.phase === 'background') {
       const running = list.helpers.filter(one => one.status === 'running').length
       header = vector ? (
-        headline(kit.icon('clock', 'active', ''), 'Still working in the background', ` · ${running} left · ${list.title} · ${elapsed}`)
+        headline(kit.icon('clock', 'active', 'In the background'), 'Still working in the background', ` · ${running} left · ${list.title} · ${elapsed}`)
       ) : (
         <Text wrap="truncate-end" color="cyan" bold={isCalm}>
           {fit(`◷ Still working in the background · ${running} left · ${list.title} · ${elapsed}`, headerWidth).trimEnd()}
@@ -3482,7 +3472,7 @@ export function registerGlance(on: On): void {
       )
     } else if (list.phase === 'done') {
       header = vector ? (
-        headline(kit.badge('check', 'ok', ''), 'All done', ` · ${list.title} · took ${elapsed}${jobTokenNote ? ` · ${jobTokenNote}` : ''}`)
+        headline(kit.badge('check', 'ok', 'All done'), 'All done', ` · ${list.title} · took ${elapsed}${jobTokenNote ? ` · ${jobTokenNote}` : ''}`)
       ) : (
         <Text wrap="truncate-end" color="green" bold={isCalm}>
           {fit(`✓ All done · ${list.title} · took ${elapsed}${jobTokenNote ? ` · ${jobTokenNote}` : ''}`, headerWidth).trimEnd()}
@@ -3504,9 +3494,8 @@ export function registerGlance(on: On): void {
         vector ? headerWidth - 3 - widthOf(list.title) : headerWidth - Math.min(list.title.length, 20),
       )
       header = vector ? (
-        headline(list.hasPlan ? kit.ring(overall, 0, `${overall}% done`) : kit.ring(null, isCalm ? 0 : tick, 'Working'), list.title, details, {
-          isLeadPlain: list.tasks.some(one => one.status === 'active'),
-        })
+        // The job's name in bold, as in the Plan: it heads the list, so it never reads as one more step in it.
+        headline(list.hasPlan ? kit.ring(overall, 0, `${overall}% done`) : kit.ring(null, isCalm ? 0 : tick, 'Working'), list.title, details)
       ) : (
         <Text wrap="truncate-end">
           <Text bold>{fit(list.title, Math.max(8, headerWidth - details.length)).trimEnd()}</Text>
@@ -3549,19 +3538,22 @@ export function registerGlance(on: On): void {
     }
     // A step on vector surfaces: its mark and name, then, dim, what it is doing or got done; in Details its time and
     // tokens keep to a column on the right. A step whose mark says it all gets no word of its own.
+    // The tail takes only the room left (width 0, then grow) and is cut there, so the time on the right always shows.
     const step = (key: string, mark: RenderChildren, name: RenderChildren, tail: string, extra?: RenderChildren, note = '') => (
       <Box key={key} flexDirection="row" alignItems="center" gap={1} width={columns}>
         {mark}
-        <Box flexShrink={1}>{name}</Box>
+        <Box flexShrink={1} minWidth={0}>
+          {name}
+        </Box>
         {extra}
         {tail !== '' && (
-          <Box key="tail" flexShrink={1} marginLeft={1}>
+          <Box key="tail" width={0} flexGrow={1} minWidth={0} marginLeft={1}>
             <Text dimColor wrap="truncate-end">
               {tail}
             </Text>
           </Box>
         )}
-        {note !== '' && <Box key="gap" flexGrow={1} />}
+        {note !== '' && tail === '' && <Box key="gap" flexGrow={1} />}
         {note !== '' && (
           <Box key="note" flexShrink={0} marginLeft={2}>
             <Text dimColor>{note}</Text>
@@ -3574,7 +3566,7 @@ export function registerGlance(on: On): void {
       vector ? (
         line(
           key,
-          kit.blank(),
+          kit.blank('Detail'),
           <Text dimColor wrap="truncate-end">
             {text}
           </Text>,
@@ -3821,7 +3813,7 @@ export function registerGlance(on: On): void {
             isActive: isRunning,
             element: line(
               helperKey,
-              kit.blank(),
+              kit.blank('Helper'),
               <Box flexDirection="row" alignItems="center" gap={1}>
                 {isRunning
                   ? kit.ring(null, isCalm ? 0 : tick, 'Running', 13)

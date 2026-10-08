@@ -1211,6 +1211,39 @@ test('on the desktop every mark is an SVG icon, and no text or button carries a 
   }
 })
 
+// The desktop app draws nothing for an Svg whose alt is empty: a mark without words would just be missing.
+test('on the desktop every drawing says what it is, in every state of the checklist and in every panel', async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  const SETTINGS = { ...PANE, requestId: 'glanceflow-settings' } as const
+  const nameless = async (...targets: object[]) => {
+    const found: string[] = []
+    for (const target of targets) {
+      const ui = await $.ui.mount({ ...target, surface: 'desktop' } as never)
+      const svgs = await ui.findAll({ type: 'Svg' })
+      await ui.unmount()
+      found.push(...svgs.filter(one => String(one.props.alt ?? '').trim() === '').map(one => String(one.props.source).slice(0, 80)))
+    }
+    return found
+  }
+  expect(await nameless(BAND)).toEqual([])
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await callTool($, { tool: PROGRESS, task: 'Write it', percent: 100, summary: 'Wrote the page' })
+  await callTool($, { tool: 'Bash', command: 'npm run build' })
+  await $.command.run({ command: 'glanceflow', args: 'details on' } as never)
+  expect(await nameless(BAND, PLAN_PANE, SETTINGS)).toEqual([])
+  await $.classic.Notification({ message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+  expect(await nameless(BAND, PLAN_PANE)).toEqual([])
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
+  expect(await nameless(BAND, PLAN_PANE)).toEqual([])
+  await $.turn.start({ text: 'continue', turnId: 't2' })
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' })
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  expect(await nameless(BAND, PLAN_PANE, PANE)).toEqual([])
+})
+
 test('the History button opens the panel; the day picker moves between days', async ($, on) => {
   const clock = mock.clock(on, { now: new Date(2026, 9, 6, 10, 0).getTime() })
   mock.store(on, {

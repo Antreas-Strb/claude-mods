@@ -116,7 +116,8 @@ export function ringSvg(tone: Tone, size = 16, percent: number | null = null, tu
       ? `<circle cx="12" cy="12" r="8.5" stroke="${colorOf(tone)}" stroke-width="3" stroke-dasharray="${length.toFixed(2)} ${RING.toFixed(2)}" transform="rotate(${start} 12 12)"/>`
       : ''
 
-  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" stroke="${TONE.quiet}" stroke-opacity=".35" stroke-width="3"/>${arc}</svg>`
+  // The track takes the ring's own tone, faint, so a ring barely begun still reads apart from a step to come.
+  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" stroke="${colorOf(tone)}" stroke-opacity=".3" stroke-width="3"/>${arc}</svg>`
 }
 
 /** A step still to come: an open ring. */
@@ -126,7 +127,7 @@ export function openRingSvg(size = 16, height = size): string {
 
 /** An empty square the size of an icon: keeps an indented line in line with the names above it. */
 export function blankSvg(size = 16, height = size): string {
-  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}"/>`
+  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}"><rect width="24" height="24" fill="none"/></svg>`
 }
 
 /**
