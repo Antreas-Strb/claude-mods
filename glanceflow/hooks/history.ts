@@ -91,7 +91,8 @@ export function entryFromChecklist(list: GlanceChecklist, project: string, costU
     startedAt: list.startedAt,
     finishedAt: list.finishedAt,
     title: list.title,
-    outcome: OUTCOME[list.phase],
+    // A job that finished with a question for the person is still a finished job.
+    outcome: list.phase === 'needsYou' && list.finishedAt !== null ? 'done' : OUTCOME[list.phase],
     stepsDone: list.tasks.filter(one => one.status === 'done').length,
     stepsTotal: list.tasks.length,
     newTokens: tokens - cached,

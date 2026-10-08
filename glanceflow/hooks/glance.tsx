@@ -538,6 +538,11 @@ export function isStartWords(text: string): boolean {
   return /^(start|go|go ahead|ok|okay|yes|looks good|approved?|ξεκίνα|ξεκινα|ναι|οκ|εντάξει|ενταξει)( please)?$/.test(words)
 }
 
+/** Claude's last message ends by asking the person something. Greek writes its question mark as ";", so both count; a code block never does. */
+export function asksQuestion(answer: string): boolean {
+  return /[?;？؟]$/.test(answer.trimEnd().replace(/[*_"'”»)\s]+$/g, ''))
+}
+
 /** True when the text has no letters outside the Latin alphabet, so it can stand as an English title. */
 export function isLatinText(text: string): boolean {
   return !/(?!\p{Script=Latin})\p{L}/u.test(text)
@@ -822,7 +827,7 @@ const saveChecklist = async ($: $) => {
 const restoreChecklist = async ($: $) => {
   const id = await $.session.id().catch(() => null)
   const saved = id === null ? undefined : (((await $.store.get(RESUME_KEY)) ?? {}) as SavedChecklists)[id]
-  if (saved === undefined || saved.list.phase === 'done') return
+  if (saved === undefined || isFinished(saved.list)) return
   const list = saved.list
   // Still true after a restart: a plan waiting for Start, or Claude waiting for a reply. Anything else was cut off.
   const holds = list.phase === 'stopped' || (list.phase === 'needsYou' && (list.needsYouReason === APPROVE || list.needsYouReason === WAITING))
@@ -935,6 +940,9 @@ const setWorking = ($: $) =>
       ? { ...list, phase: 'working', needsYouReason: null, stuckReason: null }
       : list,
   )
+
+/** A job that ended: All done, or finished with a question for the person (Needs you, with a finish time). */
+const isFinished = (list: GlanceChecklist) => list.phase === 'done' || (list.phase === 'needsYou' && list.finishedAt !== null)
 
 const setNeedsYou = ($: $, reason: string) =>
   change($, list =>
@@ -1815,7 +1823,7 @@ export function registerGlance(on: On): void {
     if (current !== null && current.approval === 'waiting' && (text === START_TEXT || isStartWords(text))) {
       // Start, or "go ahead" typed: the plan is approved and the same job goes on.
       await change($, list => ({ ...list, approval: 'approved', phase: 'working', needsYouReason: null, isCollapsed: false }))
-    } else if (current !== null && (text === CONTINUE_TEXT || (isContinueWords(text) && current.phase !== 'done'))) {
+    } else if (current !== null && (text === CONTINUE_TEXT || (isContinueWords(text) && !isFinished(current)))) {
       // The Continue button, or "continue" typed: the same job picks up again.
       await change($, list => ({
         ...list,
@@ -1828,7 +1836,7 @@ export function registerGlance(on: On): void {
       }))
     } else if (text && !text.startsWith('/')) {
       const list = current
-      if (list === null || list.phase === 'done' || list.phase === 'stopped' || list.phase === 'background') {
+      if (list === null || isFinished(list) || list.phase === 'stopped' || list.phase === 'background') {
         await startJob($, text, e.turnId)
       } else {
         await setWorking($)
@@ -2118,10 +2126,12 @@ export function registerGlance(on: On): void {
           // A quick answer needed no plan: one plain step instead of the placeholders.
           tasks: current.hasPlan ? current.tasks : carryTokens(current.tasks, [task('Answer your question', 'done')]),
         }))
+        // A finished job whose last message asks something still waits for the person.
+        const isAsking = asksQuestion(e.answer ?? '')
         await change($, current => ({
           ...current,
-          phase: 'done',
-          needsYouReason: null,
+          phase: isAsking ? 'needsYou' : 'done',
+          needsYouReason: isAsking ? QUESTION : null,
           stuckReason: null,
           finishedAt: finished,
           tasks: current.tasks.map(one => ({ ...one, status: 'done' as const, percent: 100, hasReported: true })),

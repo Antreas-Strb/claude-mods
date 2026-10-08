@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, asksQuestion, carryTokens, isContinueWords, isLatinText, isStartWords, cleanName, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
@@ -374,6 +374,61 @@ test('two open steps after an answer still say Needs you', async ($, on) => {
   await $.turn.complete({ answer: 'Which colour?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
 
   expect((await texts($, 'terminal')).join('\n')).toContain('Needs you')
+})
+
+test('a last message that asks something is a question, in English or Greek', () => {
+  expect(asksQuestion('The page is ready. Do you want me to deploy it?')).toBe(true)
+  expect(asksQuestion('Έτοιμο. Να το ανεβάσω στο Vercel;')).toBe(true)
+  expect(asksQuestion('Which one do you prefer? **Reply with a number?**')).toBe(true)
+  expect(asksQuestion('Want me to go on?\n\n')).toBe(true)
+  expect(asksQuestion('The page is ready.')).toBe(false)
+  expect(asksQuestion('Τελείωσε. Δεν χρειάζεται κάτι άλλο.')).toBe(false)
+  expect(asksQuestion('Added the line:\n```js\nconst a = 1;\n```')).toBe(false)
+  expect(asksQuestion('')).toBe(false)
+})
+
+test('a finished job that ends with a question says Needs you and chimes, not All done', async ($, on) => {
+  const { heard } = soundWorld(on)
+  await $.command.run({ command: 'glanceflow', args: 'sound on' } as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await callTool($, { tool: PROGRESS, task: 'Write it', percent: 100 })
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  heard.length = 0
+  await $.turn.complete({ answer: 'The page is ready. Do you want me to deploy it?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Needs you')
+  expect(shown).toContain("Answer Claude's question in the chat")
+  expect(shown).not.toContain('All done')
+  expect(shown).not.toContain('‖ Pause')
+  expect(heard).toEqual(['sounds/needs-you.wav'])
+})
+
+test('a quick answer that ends with a question also says Needs you', async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'Which database?', turnId: 't1' })
+  await $.turn.complete({ answer: 'Postgres or SQLite, which do you prefer?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  expect((await texts($, 'terminal')).join('\n')).toContain('Needs you')
+})
+
+test('the reply to that question starts a new job, and the History keeps the first one as done', async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it'] })
+  await callTool($, { tool: PROGRESS, task: 'Write it', percent: 100 })
+  await $.turn.complete({ answer: 'Ready. Shall I deploy it?', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.turn.start({ text: 'Yes, deploy it to Vercel', turnId: 't2' })
+
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).not.toContain('Needs you')
+  expect(shown).toContain('Yes, deploy it to Vercel')
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  const pane = (await paneTexts($)).join('\n')
+  expect(pane).toContain('Build my landing page')
+  expect(pane).toContain('Total: 1 task · 1 done')
 })
 
 test('narrow headers drop the least important details first', () => {
