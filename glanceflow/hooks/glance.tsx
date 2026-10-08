@@ -3479,7 +3479,7 @@ export function registerGlance(on: On): void {
           <Box flexDirection="column" width={columns}>
             {row(
               <Box flexDirection="row" alignItems="center" gap={1}>
-                {kit.icon('spark', 'active', 'Welcome')}
+                {kit.icon('spark', 'active', STATUS)}
                 <Text bold wrap="truncate-end">
                   {leadOf(['Welcome to GlanceFlow', 'Welcome'])}
                 </Text>

@@ -1379,7 +1379,7 @@ test('in the Desktop app the bold words of a header are never cut: a narrow band
   }
 })
 
-test('in the Desktop app the welcome card says Welcome whole in a narrow band, and its words sit in empty room', async ($, on) => {
+test('in the Desktop app the welcome card says Welcome whole in a narrow band and once to a screen reader, and its words sit in empty room', async ($, on) => {
   mock.store(on)
   mock.clock(on, { now: 1_000_000 })
   on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
@@ -1393,8 +1393,12 @@ test('in the Desktop app the welcome card says Welcome whole in a narrow band, a
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const words = (await ui.findAll({ type: 'Box' })).find(one => one.props.key === 'tour-text')
+  const alts = (await ui.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
   await ui.unmount()
   expect(JSON.stringify(words ?? null)).not.toContain('"type":"Svg"')
+  // The mark beside "Welcome to GlanceFlow" says Status, as every header's does, so Welcome is heard once.
+  expect(alts).toContain('Status')
+  expect(alts).not.toContain('Welcome')
 })
 
 test('in the Desktop app a line under a step starts in empty room as wide as a mark, so a screen reader hears no blank', async ($, on) => {
