@@ -61,6 +61,24 @@ async function texts($: Engine, surface: (typeof SURFACES)[number], bodyColumns 
   return [...found, ...buttons, ...menus, ...marks]
 }
 
+type Drawn = { type: string; props: Record<string, unknown>; children?: (Drawn | string)[] }
+
+/** Marks a screen reader would say twice: an alt its row's words hold, or one another mark in the row has. */
+function echoes(boxes: unknown[]): string[] {
+  const textOf = (node: Drawn | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
+  const altsOf = (node: Drawn | string): string[] =>
+    typeof node === 'string' ? [] : node.type === 'Svg' ? [String(node.props.alt)] : (node.children ?? []).flatMap(altsOf)
+  const found = (boxes as Drawn[])
+    .filter(one => one.props.flexDirection === 'row')
+    .flatMap(row => {
+      const alts = altsOf(row)
+      const words = textOf(row)
+      const says = (alt: string) => new RegExp(`(^|\\W)${alt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|\\W)`, 'i').test(words)
+      return alts.filter((alt, at) => alts.indexOf(alt) !== at || says(alt)).map(alt => `${alt} ⟶ ${words}`)
+    })
+  return [...new Set(found)]
+}
+
 describe('clean names', () => {
   test('backtick code is stripped', () => {
     expect(cleanName('Build the pricing section in `src/Pricing.tsx`')).toBe('Build the pricing section in')
@@ -1427,6 +1445,56 @@ test('in the Desktop app a line under a step starts in empty room as wide as a m
   const planAlts = (await plan.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
   await plan.unmount()
   expect(planAlts).not.toContain('Detail')
+})
+
+test('in the Desktop app no mark says again what the words beside it say, in the band, the Plan or History', async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  const drawn = async (mount: Parameters<Engine['ui']['mount']>[0]) => {
+    const ui = await $.ui.mount(mount)
+    const boxes = await ui.findAll({ type: 'Box' })
+    await ui.unmount()
+    return boxes
+  }
+  const noticeOf = (boxes: unknown[]) => (boxes as Drawn[]).find(one => one.props.key === 'limit')?.children?.[0]
+  const measure = (context: number, limit: number) =>
+    $.session.measure({
+      context: { window: 200_000, tokens: context * 2000, percent: context },
+      rateLimits: [{ kind: 'five_hour', percentUsed: limit }],
+      changed: ['context', 'rateLimits'],
+    } as never)
+
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
+  await callTool($, { tool: PROGRESS, task: 'Write the page', percent: 40 })
+  // The bar says 40%; the mark beside the step's name says Now.
+  expect(echoes(await drawn({ ...BAND, surface: 'desktop' }))).toEqual([])
+  expect(echoes(await drawn({ ...PLAN_PANE, surface: 'desktop' }))).toEqual([])
+
+  // A notice's words say what it is: its mark says Notice.
+  await measure(60, 10)
+  let band = await drawn({ ...BAND, surface: 'desktop' })
+  expect(echoes(band)).toEqual([])
+  expect(JSON.stringify(noticeOf(band))).toContain('"alt":"Notice"')
+  await measure(10, 85)
+  band = await drawn({ ...BAND, surface: 'desktop' })
+  expect(echoes(band)).toEqual([])
+  expect(JSON.stringify(noticeOf(band))).toContain('"alt":"Notice"')
+  await detailsOn($)
+  await measure(10, 20)
+  band = await drawn({ ...BAND, surface: 'desktop' })
+  expect(echoes(band)).toEqual([])
+  expect(JSON.stringify(noticeOf(band))).toContain('"alt":"Notice"')
+
+  // History with nothing saved says so in words; its mark says History.
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  const history = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const alts = (await history.findAll({ type: 'Svg' })).map(one => String(one.props.alt))
+  const words = (await history.findAll({ type: 'Text' })).map(one => one.text).join('\n')
+  await history.unmount()
+  expect(words).toContain('No tasks saved')
+  expect(alts).toEqual(['History'])
 })
 
 test('in the Desktop app a header keeps whole pieces: what has no room is left out, never cut mid-word', async ($, on) => {
@@ -2958,6 +3026,8 @@ test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads
   await desk.unmount()
   expect(JSON.stringify(deskBoxes.find(one => one.props.key === 'actions') ?? null)).toContain('Where we left off')
   expect(JSON.stringify(deskBoxes.find(one => one.props.key === 'recap') ?? null)).not.toContain('Where we left off')
+  // Its mark says Notice: the words say the chat was tidied up.
+  expect(echoes(deskBoxes)).toEqual([])
 
   // Where we left off opens the checkpoint in a side panel, and the note on the band goes.
   const card = await $.ui.mount({ ...BAND, surface: 'terminal' })

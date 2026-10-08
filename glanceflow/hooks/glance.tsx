@@ -103,6 +103,8 @@ const QUESTION = "Answer Claude's question in the chat"
 const WAITING = 'Reply to Claude in the box below'
 // What a mark beside a state's own bold word says: the word follows, so a screen reader hears it once, not twice.
 const STATUS = 'Status'
+// What a mark beside a notice says: a usage limit, a full chat, a tidy-up. The words beside it say which.
+const NOTICE = 'Notice'
 const APPROVE = 'Read the plan, then press Start or tell Claude what to change'
 
 const enabledAtom = atom({ plugin: 'glanceflow', key: 'glanceEnabled' } as const, true)
@@ -3017,7 +3019,7 @@ export function registerGlance(on: On): void {
           {picker}
           {vector ? (
             <Box flexDirection="row" gap={1}>
-              {kit.icon('plan', 'quiet', 'Nothing saved')}
+              {kit.icon('plan', 'quiet', 'History')}
               <Text dimColor wrap="wrap">
                 {words}
               </Text>
@@ -3300,10 +3302,10 @@ export function registerGlance(on: On): void {
           line(
             'limit',
             isHigh
-              ? kit.icon('alert', top >= LIMIT_ALERT ? 'alert' : 'warn', 'Near a limit')
+              ? kit.icon('alert', top >= LIMIT_ALERT ? 'alert' : 'warn', NOTICE)
               : isChatFull
-                ? kit.icon('tidy', 'warn', 'Chat getting full')
-                : kit.icon('clock', 'quiet', 'Usage'),
+                ? kit.icon('tidy', 'warn', NOTICE)
+                : kit.icon('clock', 'quiet', NOTICE),
             // Whole pieces, as in the header: about 0.8 of a cell a character, less the mark.
             <Text wrap="truncate-end" dimColor={!isHigh}>
               {wholePieces(words, Math.floor(columns / 0.8) - 3)}
@@ -3354,7 +3356,7 @@ export function registerGlance(on: On): void {
           // Its buttons sit with the other actions at the bottom right.
           line(
             'recap',
-            kit.badge('check', 'ok', 'Tidied up'),
+            kit.badge('check', 'ok', NOTICE),
             <Text wrap="truncate-end">Chat tidied up. Claude kept a checkpoint of the work.</Text>,
           )
         ) : (
@@ -3933,9 +3935,10 @@ export function registerGlance(on: On): void {
             roomFor(hasBar ? 10 : 0) - (note !== '' ? widthOf(note) + 3 : 0),
             hasBar ? 0 : 3,
           )
+          // The bar says how far the step is, so the mark beside the name says Now, as the Plan's does, not that again.
           element = step(
             key,
-            kit.badge(standing?.icon ?? 'play', standing?.tone ?? 'active', label),
+            kit.badge(standing?.icon ?? 'play', standing?.tone ?? 'active', standing?.label ?? 'Now'),
             <Text bold wrap="truncate-end">
               {shown.name}
             </Text>,
