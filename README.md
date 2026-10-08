@@ -52,7 +52,7 @@ The button above the prompt cycles **Simple → Details → Off**; in the Deskto
 
 ## What you get
 
-- **Made for the Desktop app:** in the Code tab, GlanceFlow draws its own icons, progress rings and slim bars, and lays its rows out for the app's font, so columns line up. Every header reads the same way: the state in bold, then the job and how far it is (`Working · Build my landing page · 2 of 4 done · about 2m left`). The current step has a blue mark and the only bar; finished steps get a green ringed check; amber always means Claude needs you. Every control is the app's own button: **Pause**, **Continue** or **Start** sits beside the status it changes, the places to go (**Plan**, **History**, **Settings**) sit under the checklist, and the view is a menu. **Fresh chat** shows once the job has stopped or finished, or the chat is getting full. Settings are rows with a menu each, as on a Mac. The panels have no extra Close buttons, since the app's own × closes them. The terminal keeps its one-cell symbols.
+- **Made for the Desktop app:** in the Code tab, GlanceFlow draws its own icons, progress rings and slim bars, and lays its rows out for the app's font, so columns line up. Every header reads the same way: the state in bold, then the job and how far it is (`Working · Build my landing page · 2 of 4 done · about 2m left`). The current step has a blue mark and the only bar; finished steps get a green ringed check; amber always means Claude needs you. Every control is the app's own button. The **View** menu (Simple, Detailed or Off) sits at the top right; under the checklist the places to go (**Plan**, **History**, **Settings**) sit on the left, and everything that acts sits together on the right: **Tidy up now**, **Fresh chat**, then **Pause**, **Continue** or **Start**, the main one last. Another mod that draws only buttons (Replay, say) has them join that group. **Fresh chat** shows once the job has stopped or finished. Settings are rows with a menu each, as on a Mac. The panels have no extra Close buttons, since the app's own × closes them. The terminal keeps its one-cell symbols.
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
 - **Approve the plan first (optional):** turn it on in ⚙ Settings or with `/glanceflow approve on`, and Claude shows its plan and waits. Press **▶ Start**, or tell Claude what to change and it lays out a new plan.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A step that runs past its usual time says `taking longer` instead of a guess, and the total waits until it can be estimated again. A plan of more than five steps folds its finished steps, and the steps after the next one, into a line each; **▤ Plan** shows them all.
@@ -150,7 +150,7 @@ Biggest tasks
 | `/glanceflow guard on`, `/glanceflow guard off` | Turns the password guard on or off |
 | `/glanceflow approve on`, `/glanceflow approve off` | Claude waits for ▶ Start before it works, or starts right away |
 
-The button above the prompt cycles Simple, Details and Off; in the Desktop app the View menu picks one.
+The button above the prompt cycles Simple, Details and Off; in the Desktop app the View menu at the top right picks Simple, Detailed or Off.
 
 ## Limits
 

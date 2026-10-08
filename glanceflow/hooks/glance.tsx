@@ -600,6 +600,40 @@ export function activityTarget(input: { command?: unknown; file_path?: unknown; 
 
 const widthOf = (text: string) => Array.from(text).reduce((sum, char) => sum + cellsOf(char), 0)
 
+const childrenOf = (children: unknown) =>
+  (Array.isArray(children) ? children : [children]).filter(kid => kid !== null && kid !== undefined && kid !== false)
+
+/** A drawing of nothing but buttons: a Button, or Boxes that hold only buttons. */
+export function isButtonsOnly(tree: unknown): boolean {
+  if (tree === null || typeof tree !== 'object') return false
+  const { type, children } = tree as { type?: unknown; children?: unknown }
+  if (type === 'Button') return true
+  if (type !== 'Box') return false
+  const kids = childrenOf(children)
+  return kids.length > 0 && kids.every(isButtonsOnly)
+}
+
+/** The buttons in a drawing of nothing but buttons, in order, to line up in a row of their own. */
+const buttonsIn = (tree: unknown): unknown[] =>
+  (tree as { type?: unknown }).type === 'Button' ? [tree] : childrenOf((tree as { children?: unknown }).children).flatMap(buttonsIn)
+
+/**
+ * What other mods draw beneath, split: their lone buttons (Replay, say), which join GlanceFlow's actions, and the
+ * rest, which stays under the band. A drawing of nothing but buttons comes up whole; inside a stack (a column) only a
+ * button standing on its own does, so a mod's own group of buttons (the next-steps suggestions) stays with its words.
+ */
+export function liftButtons(tree: unknown, isWhole = true): { buttons: unknown[]; rest: unknown } {
+  if (tree === null || typeof tree !== 'object') return { buttons: [], rest: tree }
+  const { type, props, children } = tree as { type?: unknown; props?: { flexDirection?: unknown }; children?: unknown }
+  if (type === 'Button' || (isWhole && isButtonsOnly(tree))) return { buttons: buttonsIn(tree), rest: null }
+  if (type !== 'Box' || props?.flexDirection !== 'column') return { buttons: [], rest: tree }
+  const parts = childrenOf(children).map(kid => liftButtons(kid, false))
+  const buttons = parts.flatMap(part => part.buttons)
+  if (buttons.length === 0) return { buttons: [], rest: tree }
+  const kept = parts.map(part => part.rest).filter(one => one !== null && one !== undefined)
+  return { buttons, rest: kept.length === 0 ? null : { ...(tree as object), children: kept } }
+}
+
 export function ownWords(text: string): string {
   return text.replace(/<([A-Za-z][\w-]*)\b[^>]*>[\s\S]*?<\/\1>/g, ' ').trim()
 }
@@ -2370,8 +2404,8 @@ export function registerGlance(on: On): void {
           'view',
           'eye',
           'View',
-          view === 'simple' ? 'Simple' : view === 'detailed' ? 'Details' : 'Off',
-          choice('view', [['simple', 'Simple'], ['detailed', 'Details'], ['off', 'Off']], view, value => setView($, value)),
+          view === 'simple' ? 'Simple' : view === 'detailed' ? (vector ? 'Detailed' : 'Details') : 'Off',
+          choice('view', vector ? [['detailed', 'Detailed'], ['simple', 'Simple'], ['off', 'Off']] : [['simple', 'Simple'], ['detailed', 'Details'], ['off', 'Off']], view, value => setView($, value)),
           viewHelp,
         )}
         {group(
@@ -3099,18 +3133,22 @@ export function registerGlance(on: On): void {
     // flex rows with SVG marks and one slim bar. The terminal lines its columns up by cells, with glyphs.
     const kit = kitOf(table, e.surface)
     const vector = kit.isVector
+    const isEnabled = await read($, enabledAtom)
+    const list = isEnabled ? await read($, checklistAtom) : null
+    // Another mod's buttons (Replay, say) sit with GlanceFlow's own actions at the bottom right, where the job's
+    // checklist has that row; anything else it draws stays under the band.
+    const lifted = vector && list !== null ? liftButtons(beneath) : { buttons: [], rest: beneath }
+    const kept = lifted.rest as RenderElement | null
     // What is beneath may be the engine's own node, which can't sit under a Box with a width: wrap, don't nest.
     const withBeneath = (tree: RenderElement): RenderElement =>
-      beneath ? (
+      kept ? (
         <Box flexDirection="column">
           {tree}
-          {beneath}
+          {kept}
         </Box>
       ) : (
         tree
       )
-    const isEnabled = await read($, enabledAtom)
-    const list = isEnabled ? await read($, checklistAtom) : null
     const tick = list ? await read($, tickAtom) : 0
     const usage = isEnabled ? await read($, usageAtom) : NO_USAGE
     const isDetailed = isEnabled && (await read($, detailAtom)) === 'detailed'
@@ -3168,9 +3206,6 @@ export function registerGlance(on: On): void {
           canContinue && action('continue', 'play', continueLabel, () => continueJob($), undefined, !(vector && isLimitStuck)),
         ].filter(Boolean)
       : []
-    const controlLabels = [canPause && pauseLabel, list0?.approval === 'waiting' && 'Start', canContinue && continueLabel].filter(
-      (label): label is string => typeof label === 'string',
-    )
     const tidyAt = isEnabled ? await read($, tidyAtAtom) : 0
     const isChatFull = usage.contextPercent !== null && tidyAt > 0 && usage.contextPercent >= tidyAt
     // A fresh chat ends this one. Elsewhere than the terminal it stands apart from the places to go, and only once the
@@ -3202,7 +3237,7 @@ export function registerGlance(on: On): void {
     const tidy = <Button key="compact" label={vector ? 'Tidy up now' : 'Tidy it up'} onPress={() => tidyUp($)} />
     if (vector) {
       // One quiet row: the details view always shows usage; the simple view only near a limit or with the chat past the
-      // tidy-up mark, when the row ends with the button. The icon carries the colour, as the app's own notices do.
+      // tidy-up mark, whose button sits with the other actions. The icon carries the colour, as the app's own notices do.
       if (usageParts.length > 0 && (isDetailed || isHigh || isChatFull)) {
         const words = isHigh
           ? [`You've used ${Math.round(top)}% of your ${usage.limitLabel ?? 'plan'} limit${reset === null ? '' : ` · resets ${reset}`}`, isChatFull ? chatPart : '']
@@ -3220,7 +3255,6 @@ export function registerGlance(on: On): void {
             <Text wrap="truncate-end" dimColor={!isHigh}>
               {words.filter(Boolean).join(' · ')}
             </Text>,
-            isChatFull ? tidy : undefined,
           ),
         )
       }
@@ -3290,8 +3324,8 @@ export function registerGlance(on: On): void {
           label="View"
           value={view}
           options={[
+            { value: 'detailed', label: 'Detailed' },
             { value: 'simple', label: 'Simple' },
-            { value: 'detailed', label: 'Details' },
             { value: 'off', label: 'Off' },
           ]}
           onSelect={value => void setView($, value as typeof view)}
@@ -3301,7 +3335,7 @@ export function registerGlance(on: On): void {
         key="toggle"
         label={
           vector
-            ? `View: ${view === 'off' ? 'Off' : view === 'detailed' ? 'Details' : 'Simple'}`
+            ? `View: ${view === 'off' ? 'Off' : view === 'detailed' ? 'Detailed' : 'Simple'}`
             : columns < NARROW
               ? !isEnabled
                 ? '○ Off'
@@ -3318,17 +3352,20 @@ export function registerGlance(on: On): void {
         onPress={() => cycleMode($, isEnabled, isDetailed)}
       />
       )
-    // The row under the checklist. Elsewhere than the terminal: where to go on the left, the view on the right,
-    // wrapping onto a second line when the band is narrow.
+    // The row under the checklist. Elsewhere than the terminal: where to go on the left; on the right everything that
+    // acts, together: another mod's buttons, Tidy up now, Fresh chat, then Pause, Start or Continue, the main one last,
+    // as a dialog's buttons sit. In a narrow band the actions wrap onto a line of their own and still keep to the right.
     const actions =
       actionItems === null ? null : vector ? (
         <Box key="actions" flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2} rowGap={1} flexWrap="wrap" width={columns} marginTop={1}>
           <Box flexDirection="row" alignItems="center" columnGap={1} rowGap={1} flexWrap="wrap" flexShrink={1} minWidth={0}>
             {places}
           </Box>
-          <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
+          <Box flexDirection="row" alignItems="center" justifyContent="flex-end" columnGap={1} rowGap={1} flexWrap="wrap" flexGrow={1} flexShrink={1} minWidth={0}>
+            {lifted.buttons as RenderElement[]}
+            {isChatFull && tidy}
             {handoffItem}
-            {button}
+            {controls}
           </Box>
         </Box>
       ) : (
@@ -3336,15 +3373,13 @@ export function registerGlance(on: On): void {
           {actionItems}
         </Box>
       )
-    // The header's right end: on the terminal the view button; elsewhere what steers the job, or, with GlanceFlow
-    // off, the view.
-    const headerRight = vector ? (!isEnabled ? button : controls.length > 0 ? controls : null) : button
-    const rightCells = vector
-      ? !isEnabled
-        ? 20
-        : controlLabels.reduce((sum, label) => sum + widthOf(label) + 2, controlLabels.length > 0 ? 2 : 0)
-      : columns < NARROW ? 15 : 27
-    const headerWidth = Math.max(0, columns - rightCells - (vector ? 4 : 0))
+    // The header's right end holds the view, on every surface: elsewhere than the terminal a menu, as wide as
+    // "View Detailed" at about 0.8 of a cell a character, and its arrow and padding.
+    const headerRight = button
+    const rightCells = vector ? Math.ceil('View Detailed'.length * 0.8) + 4 : columns < NARROW ? 15 : 27
+    // In characters. Elsewhere than the terminal the app's font sets about 0.8 of a cell a character, so the header
+    // counts that many more before it cuts its words.
+    const headerWidth = Math.max(0, vector ? Math.floor((columns - rightCells - 2) / 0.8) : columns - rightCells)
     const row = (header: RenderChildren) => (
       <Box key="header" flexDirection="row" justifyContent="space-between" alignItems={vector ? 'center' : undefined} columnGap={vector ? 2 : undefined} width={columns}>
         <Box flexShrink={1} flexGrow={1} minWidth={0}>
@@ -3417,7 +3452,8 @@ export function registerGlance(on: On): void {
     if (list === null) {
       const hint = vector ? 'Ask Claude for something, and its plan shows here' : 'Ask Claude for something: its plan shows here'
       if (vector && isEnabled) {
-        // Nothing to show yet: one quiet row, the hint on the left and the ways in on the right.
+        // Nothing to show yet: one quiet row, the hint on the left and the ways in on the right, then Tidy up now when
+        // the chat is full, and the view last, where it sits in every state.
         return withBeneath(
           <Box flexDirection="column" width={columns}>
             <Box key="header" flexDirection="row" alignItems="center" justifyContent="space-between" gap={2} width={columns}>
@@ -3430,6 +3466,7 @@ export function registerGlance(on: On): void {
               <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
                 {action('history', 'history', 'History', () => showHistory($, dayKey(current), true))}
                 {action('settings', 'sliders', 'Settings', () => showSettings($))}
+                {isChatFull && tidy}
                 <Box marginLeft={1}>{button}</Box>
               </Box>
             </Box>

@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
-import { activityOf, asksQuestion, carryTokens, questionOf, isContinueWords, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
+import { activityOf, asksQuestion, carryTokens, questionOf, isButtonsOnly, isContinueWords, liftButtons, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
@@ -1186,6 +1186,78 @@ test('the band has History and Fresh chat buttons while GlanceFlow is on', async
   await $.command.run({ command: 'glanceflow', args: 'off' } as never)
   const off = (await texts($, 'terminal')).join('\n')
   expect(off).not.toContain('≣ History')
+})
+
+test('in the Desktop app the view is a menu at the top right, and everything that acts sits together at the bottom right', async ($, on) => {
+  world(on)
+  // Another mod's card, with words, stays under the band. (A test can't hold another mod's button; isButtonsOnly
+  // below is what lets one, Replay say, join the actions.)
+  let beneath: unknown = null
+  on('ui.render', () => beneath as never)
+  const drawn = async () => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+    const boxes = await ui.findAll({ type: 'Box' })
+    const part = (key: string) => JSON.stringify(boxes.find(one => one.props.key === key) ?? null)
+    const menus = (await ui.findAll({ type: 'Select' })).map(one => (one.props.options as { label: string }[]).map(option => option.label).join(' / '))
+    const all = JSON.stringify(boxes[0] ?? null)
+    await ui.unmount()
+    return { top: part('header-right'), bottom: part('actions'), menus, all }
+  }
+
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  const working = await drawn()
+  expect(working.menus).toEqual(['Detailed / Simple / Off'])
+  expect(working.top).toContain('"type":"Select"')
+  expect(working.top).not.toContain('Pause')
+  expect(working.bottom).toContain('Pause')
+  expect(working.bottom.indexOf('Pause')).toBeGreaterThan(working.bottom.indexOf('Settings'))
+  expect(working.bottom).not.toContain('"type":"Select"')
+
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
+  const stopped = await drawn()
+  expect(stopped.bottom.indexOf('Fresh chat')).toBeGreaterThan(stopped.bottom.indexOf('Settings'))
+  expect(stopped.bottom.indexOf('Continue')).toBeGreaterThan(stopped.bottom.indexOf('Fresh chat'))
+  expect(stopped.top).not.toContain('Continue')
+
+  beneath = { type: 'Box', props: {}, children: [{ type: 'Text', props: {}, children: ['A card from another mod'] }] }
+  const card = await drawn()
+  expect(card.bottom).not.toContain('A card from another mod')
+  expect(card.all).toContain('A card from another mod')
+})
+
+test('another mod that draws only buttons joins the actions; anything with words, or nothing, does not', () => {
+  const button = (label: string) => ({ type: 'Button', props: { key: label, label } })
+  expect(isButtonsOnly(button('Replay 1 edit'))).toBe(true)
+  expect(isButtonsOnly({ type: 'Box', props: {}, children: [button('One'), { type: 'Box', props: {}, children: [button('Two')] }] })).toBe(true)
+  expect(isButtonsOnly({ type: 'Box', props: {}, children: [{ type: 'Text', props: {}, children: ['▶ Replay: 1 edit (press r)'] }, button('Replay')] })).toBe(false)
+  expect(isButtonsOnly({ type: 'Box', props: {}, children: [] })).toBe(false)
+  expect(isButtonsOnly(null)).toBe(false)
+
+  // Stacked under another mod's row (the next-steps suggestions, say), Replay still comes out; the row stays.
+  const row = { type: 'Box', props: { flexDirection: 'row' }, children: [{ type: 'Text', props: {}, children: ['Try asking'] }, button('Run the tests')] }
+  expect(liftButtons({ type: 'Box', props: { flexDirection: 'column' }, children: [button('Replay 1 edit'), row] })).toEqual({
+    buttons: [button('Replay 1 edit')],
+    rest: { type: 'Box', props: { flexDirection: 'column' }, children: [row] },
+  })
+  expect(liftButtons(row)).toEqual({ buttons: [], rest: row })
+
+  // In a narrow band next-steps puts its lead on a line of its own over a column of button rows: those rows are its
+  // own group and stay with "Try asking"; only Replay, a button on its own, comes up.
+  const stacked = {
+    type: 'Box',
+    props: { flexDirection: 'column' },
+    children: [
+      { type: 'Box', props: { flexShrink: 0 }, children: [{ type: 'Text', props: {}, children: ['Try asking'] }] },
+      { type: 'Box', props: { flexDirection: 'column' }, children: [{ type: 'Box', props: { flexDirection: 'row' }, children: [button('Run the tests')] }, { type: 'Box', props: { flexDirection: 'row' }, children: [button('Review it'), button('Hide')] }] },
+    ],
+  }
+  expect(liftButtons({ type: 'Box', props: { flexDirection: 'column' }, children: [button('Replay 1 edit'), stacked] })).toEqual({
+    buttons: [button('Replay 1 edit')],
+    rest: { type: 'Box', props: { flexDirection: 'column' }, children: [stacked] },
+  })
+  expect(liftButtons({ type: 'Box', props: { flexDirection: 'column' }, children: [button('One'), button('Two')] }).buttons).toHaveLength(2)
+  expect(liftButtons(null)).toEqual({ buttons: [], rest: null })
 })
 
 /** Symbols Unicode 16 draws two cells wide (East Asian Width W) while Claude Code counts one, so a row holding one shifts. */
