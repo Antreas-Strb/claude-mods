@@ -49,9 +49,11 @@ async function texts($: Engine, surface: (typeof SURFACES)[number], bodyColumns 
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface })
   const found = (await ui.findAll({ type: 'Text' })).map(one => one.text)
   const buttons = (await ui.findAll({ type: 'Button' })).map(one => one.text)
+  // Vector surfaces draw marks as SVG: their alt text, bracketed, stands for them.
+  const marks = surface === 'terminal' ? [] : (await ui.findAll({ type: 'Svg' })).map(one => `[${String(one.props.alt)}]`)
   await ui.unmount()
 
-  return [...found, ...buttons]
+  return [...found, ...buttons, ...marks]
 }
 
 describe('clean names', () => {
@@ -93,14 +95,15 @@ test('a to-do list plus a 60% report draws done, current, next and up next rows'
 
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
-    expect(shown).toContain('✓')
+    const isTerminal = surface === 'terminal'
+    expect(shown).toContain(isTerminal ? '✓' : '[Done]')
     expect(shown).toContain('Read your brand notes')
-    expect(shown).toContain('▶')
-    expect(shown).toContain('██████░░░░')
+    expect(shown).toContain(isTerminal ? '▶' : '[60%]')
+    if (isTerminal) expect(shown).toContain('██████░░░░')
     expect(shown).toContain('60%')
     expect(shown).toContain('Next')
     expect(shown).toContain('Later')
-    expect(shown).toContain('GlanceFlow: Simple')
+    expect(shown).toContain(isTerminal ? 'GlanceFlow: Simple' : 'View: Simple')
   }
 })
 
@@ -113,7 +116,7 @@ test('a permission prompt shows Needs you', async ($, on) => {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).toContain('Needs you')
     expect(shown).toContain("Answer Claude's request in the chat")
-    expect(shown).toContain('‖')
+    expect(shown).toContain(surface === 'terminal' ? '‖' : '[Waiting]')
   }
 })
 
@@ -125,7 +128,7 @@ test('/glanceflow off hides the band but keeps the button', async ($, on) => {
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).not.toContain('Understand your request')
-    expect(shown).toContain('GlanceFlow: Off')
+    expect(shown).toContain(surface === 'terminal' ? 'GlanceFlow: Off' : 'GlanceFlow off')
   }
 })
 
@@ -575,7 +578,7 @@ test('a subagent shows under its step with its model and effort, then checks off
 
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
-    expect(shown).toContain('↳')
+    expect(shown).toContain(surface === 'terminal' ? '↳' : '[Running]')
     expect(shown).toContain('Find the pricing data')
     expect(shown).toContain('Explore · Haiku 4.5 · low effort')
   }
@@ -789,7 +792,7 @@ test('the simple view hides models, tokens and low plan usage; the Details butto
   for (const surface of SURFACES) {
     const simple = (await texts($, surface, 120)).join('\n')
     expect(simple).toContain('Find the prices')
-    expect(simple).toContain('GlanceFlow: Simple')
+    expect(simple).toContain(surface === 'terminal' ? 'GlanceFlow: Simple' : 'View: Simple')
     expect(simple).not.toContain('Haiku 4.5')
     expect(simple).not.toContain('tokens')
     expect(simple).not.toContain('cached')
@@ -1158,8 +1161,8 @@ test('the band has History and Fresh chat buttons while GlanceFlow is on', async
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
-    expect(shown).toContain('≣ History')
-    expect(shown).toContain('↻ Fresh chat')
+    expect(shown).toContain(surface === 'terminal' ? '≣ History' : 'History')
+    expect(shown).toContain(surface === 'terminal' ? '↻ Fresh chat' : 'Fresh chat')
   }
   await $.command.run({ command: 'glanceflow', args: 'off' } as never)
   const off = (await texts($, 'terminal')).join('\n')
@@ -1184,6 +1187,28 @@ test('the band and History draw only symbols every terminal counts as one cell',
   const [day] = await ui.findAll({ type: 'Select' })
   await ui.unmount()
   expect((day?.props as { label?: string } | undefined)?.label).toBe('Day')
+})
+
+/** The terminal's glyph marks and meters, which the desktop draws as SVG instead. */
+const GLYPH_MARKS = /[✓✗▶◀‖■◷◐◑◒◓○●◎≣⚙↻▤⚠↳█░]/
+
+test('on the desktop every mark is an SVG icon, and no text or button carries a glyph', async ($, on) => {
+  world(on)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it', 'Check it'] })
+  await callTool($, { tool: PROGRESS, task: 'Write it', percent: 100, summary: 'Wrote the page' })
+  await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  const SETTINGS = { ...PANE, requestId: 'glanceflow-settings' } as const
+  for (const target of [BAND, PLAN_PANE, PANE, SETTINGS]) {
+    const ui = await $.ui.mount({ ...target, surface: 'desktop' } as never)
+    const svgs = await ui.findAll({ type: 'Svg' })
+    const words = [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Button' }))].map(one => one.text)
+    await ui.unmount()
+    expect(svgs.length > 0).toBe(true)
+    expect(svgs.every(one => String(one.props.source).startsWith('<svg '))).toBe(true)
+    expect(words.filter(text => GLYPH_MARKS.test(text))).toEqual([])
+  }
 })
 
 test('the History button opens the panel; the day picker moves between days', async ($, on) => {
