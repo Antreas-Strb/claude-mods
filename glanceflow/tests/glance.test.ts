@@ -33,7 +33,7 @@ function world(on: On) {
   mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: true, text: 'Build my landing page', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -181,7 +181,7 @@ test('a finished job says All done and collapses after 5 seconds', async ($, on)
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -296,7 +296,7 @@ test('overall progress, time left and a grown plan show in the header and footer
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('ui.render', { component: 'SessionMode' }, (t$, e) => {
@@ -388,7 +388,7 @@ test('time left replaces time spent in the header', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
@@ -717,7 +717,7 @@ test('in details, the current step fills gradually and shows its time; done step
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   await detailsOn($)
@@ -746,7 +746,7 @@ test('a step running past its expected time says it is taking longer, not under 
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   await detailsOn($)
@@ -862,7 +862,7 @@ test("each finished job is saved, and /glanceflow history shows the day's jobs f
   const project = { cwd: '/work/landing-site' }
   historyWorld(on, project)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -1049,7 +1049,7 @@ test('the History button opens the panel; the day picker moves between days', as
     return { value: { isPlaced: true } } as never
   })
   on('ui.close', () => ({ value: undefined }) as never)
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
 
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await band.press({ key: 'history' })
@@ -1085,7 +1085,7 @@ test('Team report shows the report and copies it', async ($, on) => {
   let copied = ''
   on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }) as never)
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('ui.copy', (_, e) => {
     copied = e.text
     return { value: { isCopied: true } } as never
@@ -1103,7 +1103,7 @@ test('Team report shows the report and copies it', async ($, on) => {
 test('Fresh chat asks for a second press, then clears the chat and sends a handoff note', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   let cleared = false
   let sent = ''
   on('model.fork', () => ({ value: { isAnswered: true, text: 'Continuing from an earlier chat. Here is where things stand: the menu is fixed.', usage: {} } }) as never)
@@ -1203,7 +1203,7 @@ test("a paused step's time stands still", async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -1229,7 +1229,7 @@ function soundWorld(on: On, canSpeak = true) {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -1520,7 +1520,7 @@ test('calm mode: nothing moves, and statuses read in bold', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -1580,7 +1580,7 @@ async function tidyWorld($: Engine, on: On, compactCommand: () => void) {
   const toasts: string[] = []
   on('ui.toast', (_, e) => {
     toasts.push(String((e as { text: string }).text))
-    return undefined as never
+    return { value: undefined } as never
   })
   on('ui.log', () => ({ value: undefined }) as never)
   on('session.measure', (_, e) => ({ changed: e.changed }))
@@ -1683,7 +1683,7 @@ test("with this project's pace known, time left shows from the first step and le
   mock.store(on, { 'history:2026-10-05': [pastJob('a', '/work/landing-site', 4, 240_000), pastJob('b', '/work/landing-site', 4, 240_000)] })
   on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
 
@@ -1713,7 +1713,7 @@ test('a finished job keeps the size and time of its steps, so the next job learn
   on('store.keys', () => ({ value: [...store.keys()] }) as never)
   on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -1785,7 +1785,7 @@ test('the weekly team report covers the 7 days up to the day picked, and This we
   let copied = ''
   on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }) as never)
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('ui.copy', (_, e) => {
     copied = e.text
     return { value: { isCopied: true } } as never
@@ -1829,7 +1829,7 @@ test('your week sums up every project: steps, tasks, time, the busiest day and t
   let copied = ''
   on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }) as never)
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('ui.copy', (_, e) => {
     copied = e.text
     return { value: { isCopied: true } } as never
@@ -2055,7 +2055,7 @@ function resumeWorld(on: On, entries: Record<string, unknown> = {}) {
   })
   on('store.keys', () => ({ value: [...store.keys()] }) as never)
   on('model.complete', () => ({ value: { isAnswered: true, text: 'Build my landing page', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -2134,7 +2134,7 @@ test('▤ Plan opens the whole plan beside the chat: every step, what it got don
     return { value: { isPlaced: true } } as never
   })
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('classic.Notification', () => ({}) as never)
@@ -2230,7 +2230,7 @@ test('in Simple the percentage moves with time before a step is checked off', as
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
@@ -2271,7 +2271,7 @@ test('⚙ Settings opens one panel for the view, sounds and calm mode, each with
     return { value: undefined } as never
   })
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
-  on('ui.toast', () => undefined as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   const SETTINGS = {
@@ -2357,7 +2357,7 @@ test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads
   const toasts: string[] = []
   on('ui.toast', (_, e) => {
     toasts.push(String((e as { text: string }).text))
-    return undefined as never
+    return { value: undefined } as never
   })
   on('session.id', () => ({ value: 'chat-1' }) as never)
   on('session.measure', (_, e) => ({ changed: e.changed }))
