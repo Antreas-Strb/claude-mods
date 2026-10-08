@@ -49,11 +49,16 @@ async function texts($: Engine, surface: (typeof SURFACES)[number], bodyColumns 
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface })
   const found = (await ui.findAll({ type: 'Text' })).map(one => one.text)
   const buttons = (await ui.findAll({ type: 'Button' })).map(one => one.text)
+  // A menu reads as its label and the option picked, as the desktop draws it.
+  const menus = (await ui.findAll({ type: 'Select' })).map(one => {
+    const props = one.props as { label?: string; value?: string; options?: { value: string; label: string }[] }
+    return `${props.label}: ${props.options?.find(option => option.value === props.value)?.label ?? ''}`
+  })
   // Vector surfaces draw marks as SVG: their alt text, bracketed, stands for them.
   const marks = surface === 'terminal' ? [] : (await ui.findAll({ type: 'Svg' })).map(one => `[${String(one.props.alt)}]`)
   await ui.unmount()
 
-  return [...found, ...buttons, ...marks]
+  return [...found, ...buttons, ...menus, ...marks]
 }
 
 describe('clean names', () => {
@@ -128,7 +133,7 @@ test('/glanceflow off hides the band but keeps the button', async ($, on) => {
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).not.toContain('Understand your request')
-    expect(shown).toContain(surface === 'terminal' ? 'GlanceFlow: Off' : 'GlanceFlow off')
+    expect(shown).toContain(surface === 'terminal' ? 'GlanceFlow: Off' : 'View: Off')
   }
 })
 
@@ -348,8 +353,9 @@ test('a nearly used-up limit and a long chat show gentle warnings', async ($, on
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).toContain("You've used 85% of your 5-hour limit")
-    expect(shown).toContain('This chat is 80% full')
-    expect(shown).toContain('Tidy it up')
+    // The desktop keeps it to one quiet row: the limit, then how full the chat is, then the button.
+    expect(shown).toContain(surface === 'terminal' ? 'This chat is 80% full' : "You've used 85% of your 5-hour limit · chat 80% full")
+    expect(shown).toContain(surface === 'terminal' ? 'Tidy it up' : 'Tidy up now')
   }
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -762,7 +768,8 @@ test('plan usage shows all the time, not only near the limit', async ($, on) => 
 
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
-    expect(shown).toContain('Plan usage: 5-hour 42% · weekly 18% · chat 34% full')
+    // "Plan" is a button on the desktop; its usage line says "Usage" so the two don't read as one.
+    expect(shown).toContain(`${surface === 'terminal' ? 'Plan usage' : 'Usage'}: 5-hour 42% · weekly 18% · chat 34% full`)
     expect(shown).not.toContain('⚠')
   }
 })
@@ -1064,7 +1071,7 @@ test('the team report is plain: done, in progress, stuck and time, without token
   })
   expect(report).toContain('Daily update · landing-site ·')
   expect(report).toContain('Done\n• Build the pricing section (12 min)\n  Write the prices · Check the layout')
-  expect(report).toContain('Still in progress\n• Fix the menu: 1 of 3 steps done; next: fix the links')
+  expect(report).toContain('Still open\n• Fix the menu: 1 of 3 steps done; next: fix the links')
   expect(report).toContain('Needs attention\n• Update the footer: it got stuck and needs a decision')
   expect(report).toContain('1 of 3 tasks finished · 15 min of work')
   expect(report).not.toContain('Answer your question')
@@ -1162,8 +1169,12 @@ test('the band has History and Fresh chat buttons while GlanceFlow is on', async
   for (const surface of SURFACES) {
     const shown = (await texts($, surface)).join('\n')
     expect(shown).toContain(surface === 'terminal' ? '≣ History' : 'History')
-    expect(shown).toContain(surface === 'terminal' ? '↻ Fresh chat' : 'Fresh chat')
+    // The desktop offers a fresh chat once it helps: not mid-job, when it would end the work in hand.
+    if (surface === 'terminal') expect(shown).toContain('↻ Fresh chat')
+    else expect(shown).not.toContain('Fresh chat')
   }
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
+  expect((await texts($, 'desktop')).join('\n')).toContain('Fresh chat')
   await $.command.run({ command: 'glanceflow', args: 'off' } as never)
   const off = (await texts($, 'terminal')).join('\n')
   expect(off).not.toContain('≣ History')
@@ -1203,9 +1214,12 @@ test('on the desktop every mark is an SVG icon, and no text or button carries a 
   for (const target of [BAND, PLAN_PANE, PANE, SETTINGS]) {
     const ui = await $.ui.mount({ ...target, surface: 'desktop' } as never)
     const svgs = await ui.findAll({ type: 'Svg' })
-    const words = [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Button' }))].map(one => one.text)
+    const buttons = await ui.findAll({ type: 'Button' })
+    const words = [...(await ui.findAll({ type: 'Text' })), ...buttons].map(one => one.text)
     await ui.unmount()
     expect(svgs.length > 0).toBe(true)
+    // A plain button reads as text in the desktop app: every one there is the app's own button.
+    expect(buttons.filter(one => (one.props as { plain?: boolean }).plain).map(one => one.text)).toEqual([])
     expect(svgs.every(one => String(one.props.source).startsWith('<svg '))).toBe(true)
     expect(words.filter(text => GLYPH_MARKS.test(text))).toEqual([])
   }

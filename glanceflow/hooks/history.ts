@@ -226,7 +226,8 @@ export function teamReport(
     lines.push('')
   }
   if (open.length > 0) {
-    lines.push('Still in progress')
+    // "Open", not "in progress": a stopped job is here too, and nobody may be on it right now.
+    lines.push('Still open')
     for (const one of open) {
       const next = one.openSteps[0] ? `; next: ${one.openSteps[0].charAt(0).toLowerCase()}${one.openSteps[0].slice(1)}` : ''
       lines.push(`• ${one.title}: ${one.doneSteps.length} of ${one.stepsTotal} steps done${next}`)

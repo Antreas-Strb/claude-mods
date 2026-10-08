@@ -31,6 +31,7 @@ export const TONE_TEXT: Record<Tone, string | undefined> = {
 /** Each icon on a 24 × 24 grid, stroked 1.75 wide with round ends and joins: one weight and one corner for all. */
 const PATHS = {
   check: '<path d="M6.8 12.5l3.4 3.4 7-7.4"/>',
+  done: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.4l2.4 2.4 4.7-5"/>',
   alert: '<path d="M10.3 5.1a2 2 0 0 1 3.4 0l6.9 11.9a2 2 0 0 1-1.7 3H5.1a2 2 0 0 1-1.7-3z"/><path d="M12 10v3.6"/><path d="M12 16.6v.01"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.6V12l2.9 1.9"/>',
   stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>',
@@ -53,6 +54,7 @@ const PATHS = {
   sub: '<path d="M7 5v7a3 3 0 0 0 3 3h7.5"/><path d="M14.6 12l3 3-3 3"/>',
   spark: '<path d="M12 4.5c.5 3.9 3.6 7 7.5 7.5-3.9.5-7 3.6-7.5 7.5-.5-3.9-3.6-7-7.5-7.5 3.9-.5 7-3.6 7.5-7.5z"/>',
   bookmark: '<path d="M7 4.5h10a1 1 0 0 1 1 1v14l-6-4-6 4v-14a1 1 0 0 1 1-1z"/>',
+  more: '<path d="M6.4 12h.01M12 12h.01M17.6 12h.01" stroke-width="3.4"/>',
 } as const
 
 export type IconName = keyof typeof PATHS
@@ -60,6 +62,7 @@ export type IconName = keyof typeof PATHS
 /** What a terminal draws for each icon: one cell wide, so rows line up. */
 export const GLYPH: Record<IconName, string> = {
   check: '✓',
+  done: '✓',
   alert: '⚠',
   clock: '◷',
   stop: '■',
@@ -82,6 +85,7 @@ export const GLYPH: Record<IconName, string> = {
   sub: '↳',
   spark: '✦',
   bookmark: '◆',
+  more: '…',
 }
 
 const XMLNS = 'xmlns="http://www.w3.org/2000/svg"'
@@ -109,7 +113,8 @@ const RING = 2 * Math.PI * 8.5
  */
 export function ringSvg(tone: Tone, size = 16, percent: number | null = null, turn = 0, height = size): string {
   const known = percent !== null
-  const length = (known ? Math.max(0, Math.min(100, percent)) / 100 : 0.3) * RING
+  // A ring barely begun still shows a sliver, so it never reads as a step still to come.
+  const length = (known ? Math.max(8, Math.min(100, percent)) / 100 : 0.3) * RING
   const start = known ? -90 : -90 + (turn % 12) * 30
   const arc =
     length > 0.5
@@ -117,7 +122,7 @@ export function ringSvg(tone: Tone, size = 16, percent: number | null = null, tu
       : ''
 
   // The track takes the ring's own tone, faint, so a ring barely begun still reads apart from a step to come.
-  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" stroke="${colorOf(tone)}" stroke-opacity=".3" stroke-width="3"/>${arc}</svg>`
+  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" stroke="${colorOf(tone)}" stroke-opacity=".4" stroke-width="3"/>${arc}</svg>`
 }
 
 /** A step still to come: an open ring. */

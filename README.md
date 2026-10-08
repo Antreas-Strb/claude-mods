@@ -35,7 +35,7 @@ Then open a new chat. The first time, three short welcome cards above the prompt
 
 ## For everyone, and for engineers
 
-The button above the prompt cycles **Simple → Details → Off**. The view and on/off are remembered after a restart.
+The button above the prompt cycles **Simple → Details → Off**; in the Desktop app it is a **View** menu with the three. The view and on/off are remembered after a restart.
 
 - **Simple**, for people who aren't technical: tool calls, file diffs and command output are hidden. You see only the checklist, plain-English step names and Claude's answers.
 - **Details**, for software engineers: the checklist stays, **and the tool calls, diffs and command output stay in view too**. Each step also shows:
@@ -52,7 +52,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 
 ## What you get
 
-- **Made for the Desktop app:** in the Code tab, GlanceFlow draws its own icons, progress rings and slim bars, and lays its rows out for the app's font, so columns line up. The current step has a blue mark and the only bar; finished steps get a thin green check; amber always means Claude needs you. The action that matters right now (**Continue**, **Start**) is the one filled button. The panels have no extra Close buttons, since the app's own × closes them. The terminal keeps its one-cell symbols.
+- **Made for the Desktop app:** in the Code tab, GlanceFlow draws its own icons, progress rings and slim bars, and lays its rows out for the app's font, so columns line up. Every header reads the same way: the state in bold, then the job and how far it is (`Working · Build my landing page · 2 of 4 done · about 2m left`). The current step has a blue mark and the only bar; finished steps get a green ringed check; amber always means Claude needs you. Every control is the app's own button: **Pause**, **Continue** or **Start** sits beside the status it changes, the places to go (**Plan**, **History**, **Settings**) sit under the checklist, and the view is a menu. **Fresh chat** shows once the job has stopped or finished, or the chat is getting full. Settings are rows with a menu each, as on a Mac. The panels have no extra Close buttons, since the app's own × closes them. The terminal keeps its one-cell symbols.
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
 - **Approve the plan first (optional):** turn it on in ⚙ Settings or with `/glanceflow approve on`, and Claude shows its plan and waits. Press **▶ Start**, or tell Claude what to change and it lays out a new plan.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows the overall percentage and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A step that runs past its usual time says `taking longer` instead of a guess, and the total waits until it can be estimated again. A plan of more than five steps folds its finished steps, and the steps after the next one, into a line each; **▤ Plan** shows them all.
@@ -67,7 +67,7 @@ The button above the prompt cycles **Simple → Details → Off**. The view and 
 - **Helpers and background work:** subagents and background tasks show under the step that started them. GlanceFlow doesn't say All done while they still run.
 - **Password guard:** a message that looks like it holds a password, API key, token, card or bank number is not sent. It goes back into the prompt box; send it again within 2 minutes to send it anyway. This guard stays on even when GlanceFlow is off; turn it off in ⚙ Settings or with `/glanceflow guard off` if it gets in your way.
 - **Privacy on screen:** emails, phone numbers, keys and card numbers are masked in the conversation and in step names. Claude still reads the original text.
-- **Plan limits:** a warning shows at 80% of a plan window (red at 95%) and says when the limit resets (`resets at 18:40`); with desktop notices on, you get a notice too. A "Tidy it up" button appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten. Afterwards the checklist offers **Where we left off**, which shows you that checkpoint in a side panel (also in ⚙ Settings, or `/glanceflow checkpoint`).
+- **Plan limits:** a warning shows at 80% of a plan window (red at 95%) and says when the limit resets (`resets at 18:40`); with desktop notices on, you get a notice too. A "Tidy it up" button ("Tidy up now" in the Desktop app) appears when the chat is half full (pick the point in ⚙ Settings). Tidying up first has Claude save a checkpoint of the work (goal, what is done and left, decisions, the next step); the compaction keeps it, and Claude keeps reading it for the rest of the chat, so nothing important is forgotten. Afterwards the checklist offers **Where we left off**, which shows you that checkpoint in a side panel (also in ⚙ Settings, or `/glanceflow checkpoint`).
 
 ## What each status means
 
@@ -99,11 +99,11 @@ The checklist also survives closing Claude Code: resume the chat (`claude --resu
 
 In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** move between days (or type `/glanceflow history yesterday`, `/glanceflow history 2026-10-06`). The history stays on this computer and keeps 30 days.
 
-**Team report** turns the day into a short update in plain words for the team, a manager or a CEO, and copies it to paste into Slack, Teams or an email: what got done (step by step, in Claude's words), what is still in progress and what is next, what needs a decision, and the time spent. **This week** switches it to the 7 days up to the day picked, for a weekly update or a retro. No tokens, models or file names, and quick questions are left out.
+**Team report** turns the day into a short update in plain words for the team, a manager or a CEO, and copies it to paste into Slack, Teams or an email: what got done (step by step, in Claude's words), what is still open and what is next, what needs a decision, and the time spent. **This week** switches it to the 7 days up to the day picked, for a weekly update or a retro. In the Desktop app the buttons read **Day report** and **Week report**. No tokens, models or file names, and quick questions are left out.
 
-![The Team report: what got done, what is still in progress, what needs a decision, and the time spent](docs/glance-team-report.png)
+![The Team report: what got done, what is still open, what needs a decision, and the time spent](docs/glance-team-report.png)
 
-**Your week** (or `/glanceflow week`) is a short summary just for you, across every project: how many steps Claude checked off in how many tasks, the time at work, your busiest day and the biggest tasks. It covers the 7 days up to the day picked and is copied, ready to keep or share.
+**Your week** (or `/glanceflow week`; **All projects this week** in the Desktop app) is a short summary just for you, across every project: how many steps Claude checked off in how many tasks, the time at work, your busiest day and the biggest tasks. It covers the 7 days up to the day picked and is copied, ready to keep or share.
 
 ```
 Your week with Claude · 30 Sept 2026 to 6 Oct 2026
@@ -122,7 +122,7 @@ Biggest tasks
 
 ## Fresh chat (handoff)
 
-**↻ Fresh chat** under the checklist (or `/glanceflow handoff`), shown once the chat has some work in it, moves the work to a fresh chat: when a chat is too long, close to its limits, or whenever you want a clean start. Press it twice (the first press asks to confirm). Claude writes a short handoff note (goal, what is done, what is left, decisions, the next step), the chat is cleared, and the note is sent as the fresh chat's first message. The note is also saved: `/glanceflow handoff note` puts the last one back in the prompt box.
+**↻ Fresh chat** under the checklist (or `/glanceflow handoff`), shown once the chat has some work in it (in the Desktop app, once the job has stopped or finished, or the chat is getting full), moves the work to a fresh chat: when a chat is too long, close to its limits, or whenever you want a clean start. Press it twice (the first press asks to confirm). Claude writes a short handoff note (goal, what is done, what is left, decisions, the next step), the chat is cleared, and the note is sent as the fresh chat's first message. The note is also saved: `/glanceflow handoff note` puts the last one back in the prompt box.
 
 ## Commands
 
@@ -150,7 +150,7 @@ Biggest tasks
 | `/glanceflow guard on`, `/glanceflow guard off` | Turns the password guard on or off |
 | `/glanceflow approve on`, `/glanceflow approve off` | Claude waits for ▶ Start before it works, or starts right away |
 
-The button above the prompt cycles Simple, Details and Off.
+The button above the prompt cycles Simple, Details and Off; in the Desktop app the View menu picks one.
 
 ## Limits
 
