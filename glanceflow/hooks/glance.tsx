@@ -213,6 +213,8 @@ Start with exactly: "Continuing from an earlier chat. Here is where things stand
 // What Ship it sends, as the person's own words: the close-out a finished job needs on GitHub, so the chat archives.
 const SHIP_PROMPT = `The work is finished. Ship it on GitHub, in order, and stop at the first step that fails:
 1. Run \`git status\` and \`gh auth status\`. If this is not a GitHub repo or gh is not signed in, stop and tell me what to do.
+   If the branch has no changes against its base branch, committed or not, and no open pull request, say there is
+   nothing to ship and stop.
 2. Quick cleanup of everything this branch changes against its base branch, committed or not. Use an installed review
    skill (ponytail-review or simplify) if there is one; otherwise look yourself for dead code, needless comments,
    pass-through wrappers and AI-sounding wording. Fix only clear wins, then run the project's tests if it has any.

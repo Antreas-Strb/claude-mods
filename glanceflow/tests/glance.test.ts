@@ -1893,6 +1893,7 @@ test('Ship it shows on a finished job in a GitHub project once Finish on GitHub 
   await press()
   expect(sent).toHaveLength(1)
   expect(sent[0]).toContain('gh pr checks --watch')
+  expect(sent[0]).toContain('nothing to ship and stop')
   expect(sent[0]).toContain('gh pr merge --squash --delete-branch')
 })
 
