@@ -5,7 +5,7 @@ import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
 import { activityOf, asksQuestion, carryTokens, questionOf, isButtonsOnly, isContinueWords, liftButtons, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, wholePieces, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
-import { toggled } from '../hooks/logic'
+import { OTHER_WAITING_MS, OTHER_WORKING_MS, otherChats, otherChatsWords, staleResumeKeys, toggled } from '../hooks/logic'
 import { dayEntries, dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
 const PLAN = 'mcp__glanceflow__plan_steps'
@@ -1031,6 +1031,11 @@ describe('history days', () => {
     expect(dayEntries(null)).toEqual([])
     expect(dayEntries({ jobId: 'a' })).toEqual([])
   })
+})
+
+test('only the most recent saved checklists stay', () => {
+  expect(staleResumeKeys([['a', 3], ['b', 1], ['c', 2]], 2)).toEqual(['b'])
+  expect(staleResumeKeys([['a', 3]], 2)).toEqual([])
 })
 
 test('/glanceflow on and off set a setting, and anything else flips it', () => {
@@ -2720,7 +2725,7 @@ test('each step shows the files Claude added or changed, in the Plan and in Hist
 })
 
 /** The same world as `world`, with the clock and a store the test can read, starting with `entries`. */
-function resumeWorld(on: On, entries: Record<string, unknown> = {}) {
+function resumeWorld(on: On, entries: Record<string, unknown> = {}, failsToDelete = false) {
   const clock = mock.clock(on, { now: 1_000_000 })
   const store = new Map(Object.entries(entries))
   on('store.get', (_, e) => ({ value: store.get((e as { key: string }).key) }) as never)
@@ -2729,6 +2734,7 @@ function resumeWorld(on: On, entries: Record<string, unknown> = {}) {
     return { value: undefined } as never
   })
   on('store.delete', (_, e) => {
+    if (failsToDelete) throw new Error('locked')
     store.delete((e as { key: string }).key)
     return { value: undefined } as never
   })
@@ -2739,11 +2745,17 @@ function resumeWorld(on: On, entries: Record<string, unknown> = {}) {
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('classic.Notification', () => ({}) as never)
-  on('session.id', () => ({ value: 'chat-1' }) as never)
+  // This chat's id; a test changes it to stand for /clear, after which the process goes on as another chat.
+  const session = { id: 'chat-1' }
+  on('session.id', () => ({ value: session.id }) as never)
   on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
-  on('tool.register', () => ({ value: undefined }) as never)
+  const registered: string[] = []
+  on('tool.register', (_, e) => {
+    registered.push((e as { name: string }).name)
+    return { value: undefined } as never
+  })
   on('command.register', () => ({ value: undefined }) as never)
-  return { clock, store }
+  return { clock, store, registered, session }
 }
 
 test("a chat's checklist is kept as it changes, for when the chat is resumed", async ($, on) => {
@@ -2752,7 +2764,7 @@ test("a chat's checklist is kept as it changes, for when the chat is resumed", a
   await callTool($, { tool: PLAN, steps: ['Write the page', 'Check it'] })
   await callTool($, { tool: PROGRESS, task: 'Write the page', percent: 100, summary: 'Wrote the page' })
   await clock.advance(1500)
-  const kept = (store.get('glanceResume') as Record<string, { list: { phase: string; tasks: { name: string; status: string }[] } }>)['chat-1']
+  const kept = store.get('resume:chat-1') as { list: { phase: string; tasks: { name: string; status: string }[] } } | undefined
   expect(kept?.list.phase).toBe('working')
   expect(kept?.list.tasks.map(one => `${one.name}:${one.status}`)).toEqual(['Write the page:done', 'Check it:active'])
 })
@@ -2787,6 +2799,181 @@ test('a resumed chat gets its checklist back, paused, and Continue picks it up',
   expect(shown).not.toContain('Paused')
   expect(shown).toContain('Check it')
   expect((await callTool($, { tool: 'Bash', command: 'ls' })).deny).toBeUndefined()
+})
+
+test("each chat keeps its checklist under its own key; the old shared key moves over and only the 20 most recent stay", async ($, on) => {
+  const saved = (at: number, title: string) => ({ at, list: { title, phase: 'done', tasks: [], helpers: [], startedAt: at, finishedAt: at } })
+  const recent = Object.fromEntries(Array.from({ length: 18 }, (_, i) => [`resume:chat-${i + 10}`, saved(2_000_000 + i, `Chat ${i + 10}`)]))
+  const { store } = resumeWorld(on, {
+    ...recent,
+    glanceResume: { 'chat-2': saved(900_000, 'Old chat'), 'chat-3': saved(950_000, 'Older chat kept'), 'chat-10': saved(1, 'Stale copy') },
+  })
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+
+  expect(store.has('glanceResume')).toBe(false)
+  // A chat that already has its own key keeps it over the old shared copy.
+  expect((store.get('resume:chat-10') as { list: { title: string } }).list.title).toBe('Chat 10')
+  expect((store.get('resume:chat-3') as { list: { title: string } }).list.title).toBe('Older chat kept')
+  // 20 other chats, 19 kept beside this one: the oldest goes.
+  expect(store.has('resume:chat-2')).toBe(false)
+  expect([...store.keys()].filter(key => key.startsWith('resume:'))).toHaveLength(19)
+})
+
+test('a store that fails while tidying saved checklists does not keep the chat from starting', async ($, on) => {
+  const { registered } = resumeWorld(on, { glanceResume: { 'chat-2': { at: 1, list: { title: 'Old', phase: 'done' } } } }, true)
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  expect(registered).toContain('plan_steps')
+})
+
+test('saving one chat never touches another chat\'s key', async ($, on) => {
+  const other = { at: 5, list: { title: 'Another chat', phase: 'working' } }
+  const { clock, store } = resumeWorld(on, { 'resume:chat-2': other })
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page'] })
+  await clock.advance(1500)
+  expect(store.get('resume:chat-2')).toEqual(other)
+  expect((store.get('resume:chat-1') as { list: { title: string } }).list.title).toBe('Build my landing page')
+})
+
+test('the other chats worth a word: those that need you first, then those at work; ended, finished or silent ones are left out', () => {
+  const at = 10 * OTHER_WAITING_MS
+  const chat = (title: string, phase: string, ago: number, isOpen = true) => ({ at: at - ago, list: { title, phase }, isOpen }) as never
+  const others = otherChats(
+    [
+      chat('Write the email', 'working', 1000),
+      chat('Build the pricing page', 'needsYou', 5000),
+      chat('Fix the form', 'stuck', 2000),
+      chat('Closed one', 'needsYou', 10, false),
+      { at: at - 10, list: { title: 'Saved before 0.25', phase: 'needsYou' } } as never,
+      chat('Finished', 'done', 10),
+      chat('Paused', 'stopped', 10),
+      chat('Went silent', 'working', OTHER_WORKING_MS + 1),
+      chat('Left for days', 'needsYou', OTHER_WAITING_MS + 1),
+      undefined,
+    ],
+    at,
+  )
+  expect(others.map(one => one.title)).toEqual(['Fix the form', 'Build the pricing page', 'Write the email'])
+  expect(otherChatsWords(others)).toEqual(['2 other chats need you: Fix the form, Build the pricing page', '1 more at work'])
+  expect(otherChatsWords(others.slice(1, 2))).toEqual(['Another chat needs you: Build the pricing page'])
+  expect(otherChatsWords(others.slice(2))).toEqual(['1 other chat at work'])
+  expect(otherChatsWords([])).toEqual([])
+})
+
+test('the band names another chat that needs you, on every surface, and keeps up as the other chats change', async ($, on) => {
+  const saved = (title: string, phase: string) => ({
+    at: 1_000_000, isOpen: true, list: { title, phase, tasks: [], helpers: [], startedAt: 1_000_000, finishedAt: null },
+  })
+  const { clock, store } = resumeWorld(on, { 'resume:chat-2': saved('Write the email', 'working') })
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  for (const surface of SURFACES) {
+    expect((await texts($, surface)).join('\n')).toContain('1 other chat at work')
+  }
+
+  store.set('resume:chat-3', saved('Build the pricing page', 'needsYou'))
+  await clock.advance(20_000)
+  for (const surface of SURFACES) {
+    const shown = (await texts($, surface)).join('\n')
+    expect(shown).toContain('Another chat needs you: Build the pricing page')
+    expect(shown).toContain('1 more at work')
+  }
+
+  // A chat that ended is no longer mentioned, and this chat never mentions itself.
+  store.set('resume:chat-3', { ...saved('Build the pricing page', 'needsYou'), isOpen: false })
+  store.set('resume:chat-1', saved('This chat', 'needsYou'))
+  await clock.advance(20_000)
+  const shown = (await texts($, 'desktop')).join('\n')
+  expect(shown).not.toContain('needs you')
+  expect(shown).toContain('1 other chat at work')
+})
+
+test('a chat that ends marks its checklist closed and keeps it for when it is resumed', async ($, on) => {
+  const { clock, store } = resumeWorld(on)
+  on('session.end', () => ({ sessionId: 'chat-1' }) as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page'] })
+  await clock.advance(1500)
+  await $.session.end({ reason: 'exit' } as never)
+  const kept = store.get('resume:chat-1') as { isOpen?: boolean; list: { title: string } }
+  expect(kept.isOpen).toBe(false)
+  expect(kept.list.title).toBe('Build my landing page')
+})
+
+test('a chat that ends right after a change stays marked closed', async ($, on) => {
+  const { clock, store } = resumeWorld(on)
+  on('session.end', () => ({ sessionId: 'chat-1' }) as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page'] })
+  await $.session.end({ reason: 'exit' } as never)
+  await clock.advance(1500)
+  expect((store.get('resume:chat-1') as { isOpen?: boolean }).isOpen).toBe(false)
+})
+
+test('after /clear the chat goes on as a new one: the old one is closed, the new one is open and still reads the others', async ($, on) => {
+  const saved = { at: 1_000_000, isOpen: true, list: { title: 'Build the pricing page', phase: 'needsYou', tasks: [], helpers: [], startedAt: 1_000_000, finishedAt: null } }
+  const { clock, store, session } = resumeWorld(on, { 'resume:chat-2': saved })
+  on('session.end', () => ({ sessionId: 'chat-1' }) as never)
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  await $.turn.start({ text: 'Build my landing page', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write the page'] })
+  await clock.advance(1500)
+  await $.session.end({ reason: 'clear', sessionId: 'chat-1' } as never)
+  session.id = 'chat-3'
+  expect((store.get('resume:chat-1') as { isOpen?: boolean }).isOpen).toBe(false)
+
+  await $.turn.start({ text: 'Fix the footer', turnId: 't2' })
+  await callTool($, { tool: PLAN, steps: ['Fix it'] })
+  await clock.advance(1500)
+  expect((store.get('resume:chat-3') as { isOpen?: boolean }).isOpen).toBe(true)
+  store.set('resume:chat-2', { ...saved, list: { ...saved.list, phase: 'done' } })
+  await clock.advance(20_000)
+  expect((await texts($, 'desktop')).join('\n')).not.toContain('Another chat needs you')
+})
+
+test('a resumed chat that still waits on the person is saved as open again, so the other chats name it', async ($, on) => {
+  const list = {
+    title: 'Build my landing page', phase: 'needsYou', needsYouReason: 'Reply to Claude in the box below', stuckReason: null, tasks: [], helpers: [],
+    startedAt: 1_000_000, finishedAt: null, isCollapsed: false,
+  }
+  const { clock, store } = resumeWorld(on, { 'resume:chat-1': { at: 1_000_000, list, isOpen: false } })
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  await clock.advance(1500)
+  const kept = store.get('resume:chat-1') as { isOpen?: boolean; list: { phase: string } }
+  expect(kept.isOpen).toBe(true)
+  expect(kept.list.phase).toBe('needsYou')
+})
+
+test('the other chats line can be turned off in Settings or with /glanceflow others off', async ($, on) => {
+  const saved = { at: 1_000_000, isOpen: true, list: { title: 'Build the pricing page', phase: 'needsYou', tasks: [], helpers: [], startedAt: 1_000_000, finishedAt: null } }
+  const { clock, store } = resumeWorld(on, { 'resume:chat-2': saved })
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  await clock.advance(20_000)
+  expect((await texts($, 'desktop')).join('\n')).toContain('Another chat needs you')
+  const result = await $.command.run({ command: 'glanceflow', args: 'others off' } as never)
+  expect(result.text).toContain('no longer mentions other chats')
+  expect(store.get('glanceOthers')).toBe(false)
+  for (const surface of SURFACES) {
+    expect((await texts($, surface)).join('\n')).not.toContain('Another chat')
+  }
+  await $.command.run({ command: 'glanceflow', args: 'others on' } as never)
+  expect((await texts($, 'desktop')).join('\n')).toContain('Another chat needs you')
+})
+
+test('in a narrow band the chat that needs you is named, never left out for the count of chats at work', async ($, on) => {
+  const saved = (title: string, phase: string) => ({
+    at: 1_000_000, isOpen: true, list: { title, phase, tasks: [], helpers: [], startedAt: 1_000_000, finishedAt: null },
+  })
+  const { clock } = resumeWorld(on, {
+    'resume:chat-2': saved('Write the welcome email for the launch', 'working'),
+    'resume:chat-3': saved('Build the pricing page with three plans', 'needsYou'),
+  })
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  await clock.advance(20_000)
+  for (const surface of SURFACES) {
+    const shown = (await texts($, surface, 50)).join('\n')
+    expect(shown).toContain('Another chat needs you')
+    expect(shown).not.toContain('more at work')
+  }
 })
 
 const PLAN_PANE = {

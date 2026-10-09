@@ -36,6 +36,7 @@ import {
   MAX_NAME,
   PLUGIN,
   QUESTION,
+  RESUME_PREFIX,
   WAITING,
   activityOf,
   activityTarget,
@@ -63,6 +64,8 @@ import {
   localTimes,
   needsText,
   noticeBody,
+  otherChats,
+  otherChatsWords,
   overallProgress,
   ownWords,
   prettyModel,
@@ -74,6 +77,7 @@ import {
   sentenceCase,
   sizeOf,
   stampTimes,
+  staleResumeKeys,
   stepEstimate,
   timeLeft,
   todosToTasks,
@@ -87,6 +91,7 @@ import {
   toggled,
 } from './logic'
 
+import type { SavedChecklist } from './logic'
 import { kitOf } from './kit'
 import { GLYPH } from './look'
 import type { IconName } from './look'
@@ -110,6 +115,8 @@ const CALM_KEY = 'glanceCalm'
 const GUARD_KEY = 'glanceGuard'
 const APPROVE_KEY = 'glanceApprove'
 const NOTICE_KEY = 'glanceNotice'
+// Whether the band names the other chats that need the person; on unless turned off.
+const OTHERS_KEY = 'glanceOthers'
 const TOUR_KEY = 'glanceTour'
 /** The welcome, three short cards the first time: what the checklist is, what Needs you means, where the rest lives. */
 const TOUR_FIRST = 'A checklist shows here when you ask Claude for something with a few steps: each step, how far along it is, and about how long is left.'
@@ -140,8 +147,9 @@ const TIDY_AT_DEFAULT = 50
 const TIDY_CHOICES = [0, 40, 50, 60, 75] as const
 const TIDY_KEY = 'glanceTidyAt'
 const CHECKPOINT_KEY = 'lastCheckpoint'
-// Each recent chat's checklist, by session id, so a resumed chat picks up where it was.
-const RESUME_KEY = 'glanceResume'
+// Up to 0.24 every chat's checklist sat under this one key; now each has its own (RESUME_PREFIX).
+const OLD_RESUME_KEY = 'glanceResume'
+// The recent chats whose checklists are kept, so a resumed chat picks up where it was.
 const RESUME_KEEP = 20
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly', spend_limit: 'spending' }
 
@@ -173,6 +181,11 @@ const tourAtom = atom({ plugin: 'glanceflow', key: 'tourStep' } as const, null)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
 const checkpointAtom = atom({ plugin: 'glanceflow', key: 'checkpointAt' } as const, null)
 const recapAtom = atom({ plugin: 'glanceflow', key: 'isRecapShown' } as const, false)
+const othersAtom = atom({ plugin: 'glanceflow', key: 'otherChats' } as const, [])
+const showsOthersAtom = atom({ plugin: 'glanceflow', key: 'showsOthers' } as const, true)
+// shortcut: each read of the store parses its whole file, one per other chat; fine for 20 chats every 20 s, a single
+// shared key would read once but brings back the race of two chats saving at once.
+const OTHERS_EVERY_MS = 20_000
 const historyAtom = atom({ plugin: 'glanceflow', key: 'historyView' } as const, null)
 const HISTORY_PANE = 'glanceflow-history'
 const PLAN_PANE = 'glanceflow-plan'
@@ -215,6 +228,12 @@ type $ = EngineInterface
 let ticker: Timer | undefined
 let collapse: Timer | undefined
 let saveTimer: Timer | undefined
+// The save under way, so the chat's end waits for it rather than have it land after.
+let saving: Promise<void> = Promise.resolve()
+let othersTimer: Timer | undefined
+// Set when the chat ends: anything still saved after that (a late job name, say) keeps it marked closed.
+let hasEnded = false
+let isRefreshing = false
 let failuresInARow = 0
 // A message held back for a password: memory only, never stored, and only to let the same one through on a resend.
 let heldMessage: { text: string; at: number } | null = null
@@ -378,32 +397,79 @@ const alertFor = async ($: $, list: GlanceChecklist) => {
   }
 }
 
-type SavedChecklists = Record<string, { at: number; list: GlanceChecklist }>
-
 /** Keeps this chat's checklist, a second after it changes, for when the chat is resumed. */
 const saveSoon = ($: $) => {
   if (saveTimer !== undefined) return
   saveTimer = $.clock.after(1000, () => {
     saveTimer = undefined
-    void saveChecklist($).catch(() => undefined)
+    saving = saveChecklist($).catch(() => undefined)
   })
 }
 
-const saveChecklist = async ($: $) => {
-  const id = await $.session.id()
+/** Saves this chat's checklist under its own key; `isOpen` false once the chat has ended, so the others stop naming it. */
+const saveChecklist = async ($: $, isOpen = !hasEnded, id?: string) => {
+  const key = `${RESUME_PREFIX}${id ?? (await $.session.id())}`
   const list = await read($, checklistAtom)
-  const saved = ((await $.store.get(RESUME_KEY)) ?? {}) as SavedChecklists
-  const others = Object.entries(saved)
-    .filter(([key]) => key !== id)
-    .sort((a, b) => b[1].at - a[1].at)
-    .slice(0, RESUME_KEEP - 1)
-  await $.store.set(RESUME_KEY, Object.fromEntries(list === null ? others : [[id, { at: await now($), list }], ...others]))
+  if (list === null) await $.store.delete(key)
+  else await $.store.set(key, { at: await now($), list, isOpen } satisfies SavedChecklist)
+}
+
+/** Reads what the other chats saved and keeps those worth a word; writes only on a change, so the band redraws then. */
+const refreshOthers = async ($: $) => {
+  // One read at a time: a slow one that finished after a newer one would bring back what has changed since.
+  if (isRefreshing) return
+  isRefreshing = true
+  try {
+    // Off says nothing, and turning back on starts from a fresh read rather than an old list.
+    if (!(await read($, enabledAtom)) || !(await read($, showsOthersAtom))) {
+      await update($, othersAtom, () => [])
+      return
+    }
+    const mine = `${RESUME_PREFIX}${await $.session.id()}`
+    const saved: (SavedChecklist | undefined)[] = []
+    for (const key of await $.store.keys()) {
+      if (key.startsWith(RESUME_PREFIX) && key !== mine) saved.push((await $.store.get(key)) as SavedChecklist | undefined)
+    }
+    const others = otherChats(saved, await now($))
+    if (JSON.stringify(await read($, othersAtom)) !== JSON.stringify(others)) await update($, othersAtom, () => others)
+  } catch {
+    // A store that can't be read says nothing, rather than keep naming chats that may have moved on.
+    await update($, othersAtom, () => [])
+  } finally {
+    isRefreshing = false
+  }
+}
+
+/**
+ * Moves the one shared key of older versions to a key per chat, then keeps only the most recent chats, never this one.
+ * Moved checklists aren't marked open: those chats are named again only once they save, so a closed one never is.
+ */
+const tidySavedChecklists = async ($: $) => {
+  const mine = `${RESUME_PREFIX}${await $.session.id()}`
+  const old = await $.store.get(OLD_RESUME_KEY)
+  if (old !== undefined) {
+    for (const [id, saved] of Object.entries((old ?? {}) as Record<string, SavedChecklist>)) {
+      // shortcut: the store has no write-if-unchanged, so a chat that saves between this check and the set loses that
+      // save until its next one; checking right before the set keeps that window as small as it can be.
+      if ((await $.store.get(`${RESUME_PREFIX}${id}`)) === undefined) await $.store.set(`${RESUME_PREFIX}${id}`, saved)
+    }
+    await $.store.delete(OLD_RESUME_KEY)
+  }
+  const saved: [string, number][] = []
+  for (const key of (await $.store.keys()).filter(one => one.startsWith(RESUME_PREFIX) && one !== mine)) {
+    saved.push([key, ((await $.store.get(key)) as SavedChecklist | undefined)?.at ?? 0])
+  }
+  const stale = new Set(staleResumeKeys(saved, RESUME_KEEP - 1))
+  for (const [key, at] of saved) {
+    // A chat that saved since it was read is in use again: it stays.
+    if (stale.has(key) && (at === 0 || ((await $.store.get(key)) as SavedChecklist | undefined)?.at === at)) await $.store.delete(key)
+  }
 }
 
 /** A resumed chat gets its checklist back; work that was under way shows as paused, with Continue. */
 const restoreChecklist = async ($: $) => {
   const id = await $.session.id().catch(() => null)
-  const saved = id === null ? undefined : (((await $.store.get(RESUME_KEY)) ?? {}) as SavedChecklists)[id]
+  const saved = id === null ? undefined : ((await $.store.get(`${RESUME_PREFIX}${id}`)) as SavedChecklist | undefined)
   if (saved === undefined || isFinished(saved.list)) return
   const list = saved.list
   // Still true after a restart: a plan waiting for Start, or Claude waiting for a reply. Anything else was cut off.
@@ -417,6 +483,8 @@ const restoreChecklist = async ($: $) => {
   }
   await update($, checklistAtom, () => restored)
   syncTicker($, restored)
+  // Saved again as open, so the other chats see it as it is now.
+  saveSoon($)
 }
 
 const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | null) => {
@@ -889,6 +957,13 @@ const setNotice = async ($: $, isOn: boolean) => {
   if (isOn) void showNotice($, 'Claude needs you', 'This is how GlanceFlow will tell you.')
 }
 
+/** The line naming the other chats that need the person: off before sharing the screen, say. */
+const setOthers = async ($: $, isOn: boolean) => {
+  await update($, showsOthersAtom, () => isOn)
+  await $.store.set(OTHERS_KEY, isOn)
+  if (isOn) await refreshOthers($).catch(() => undefined)
+}
+
 /** The password guard: on holds back a message that looks like it has a password or key in it. */
 const setGuard = async ($: $, isOn: boolean) => {
   await update($, guardAtom, () => isOn)
@@ -942,6 +1017,7 @@ const resetSettings = async ($: $) => {
   await setView($, 'simple')
   await setSound($, 'off')
   await setNotice($, false)
+  await setOthers($, true)
   await setCalm($, false)
   await setGuard($, true)
   await setApprove($, false)
@@ -1014,6 +1090,25 @@ const adoptGlanceStore = async ($: $) => {
 }
 
 export function registerGlance(on: On): void {
+  // A chat that ends says so, so the other chats stop mentioning it; its checklist stays for when it is resumed.
+  on('session.end', async ($, e, next) => {
+    saveTimer?.cancel()
+    saveTimer = undefined
+    try {
+      await saving
+      await saveChecklist($, false, e.sessionId)
+    } catch {
+      // The end goes on: the other chats stop mentioning this one once it falls silent.
+    }
+    // After /clear or a resume the process goes on as another chat, with no session.start: that one is open, and
+    // keeps reading the others.
+    if (e.reason !== 'clear' && e.reason !== 'resume') {
+      hasEnded = true
+      othersTimer?.cancel()
+      othersTimer = undefined
+    }
+    return next(e)
+  })
   on('session.start', async ($, e, next) => {
     void findPlatform($)
       .then(found => {
@@ -1040,12 +1135,21 @@ export function registerGlance(on: On): void {
     await update($, approveAtom, () => approves)
     const isNoticing = (await $.store.get(NOTICE_KEY)) === true
     await update($, noticeAtom, () => isNoticing)
+    const showsOthers = (await $.store.get(OTHERS_KEY)) !== false
+    await update($, showsOthersAtom, () => showsOthers)
     const tidyAt = await $.store.get(TIDY_KEY)
     await update($, tidyAtAtom, () => (typeof tidyAt === 'number' ? tidyAt : TIDY_AT_DEFAULT))
     const saved = (await $.store.get(CHECKPOINT_KEY)) as { sessionId?: string; at?: number } | undefined
     const thisSession = await $.session.id().catch(() => null)
     await update($, checkpointAtom, () => (saved?.sessionId === thisSession && typeof saved?.at === 'number' ? saved.at : null))
     await update($, calmAtom, () => isCalmMode)
+    hasEnded = false
+    // Tidying is housekeeping: a store that fails at it must not keep the chat from starting. It never prunes this
+    // chat's own checklist, so the restore below still finds it.
+    await tidySavedChecklists($).catch(() => undefined)
+    othersTimer?.cancel()
+    othersTimer = $.clock.every(OTHERS_EVERY_MS, () => void refreshOthers($).catch(() => undefined))
+    void refreshOthers($).catch(() => undefined)
     // A resumed chat: its checklist comes back. A reload keeps the one it has.
     if ((await read($, checklistAtom)) === null) {
       await restoreChecklist($)
@@ -1095,7 +1199,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, calm on|off, guard on|off, approve on|off, week, tour, pause, continue, plan, checkpoint, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, others on|off, calm on|off, guard on|off, approve on|off, week, tour, pause, continue, plan, checkpoint, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1148,6 +1252,11 @@ export function registerGlance(on: On): void {
           ? 'Desktop notices are on: your computer tells you when Claude needs you, gets stuck or finishes a long job.'
           : 'Desktop notices are off.',
       }
+    }
+    if (arg.startsWith('others')) {
+      const isOn = toggled(arg.slice('others'.length).trim(), await read($, showsOthersAtom))
+      await setOthers($, isOn)
+      return { text: isOn ? 'The band names another chat on this computer that needs you.' : 'The band no longer mentions other chats.' }
     }
     if (arg.startsWith('approve')) {
       const choice = arg.slice('approve'.length).trim()
@@ -1746,6 +1855,7 @@ export function registerGlance(on: On): void {
     const sound = await read($, soundAtom)
     const isCalm = await read($, calmAtom)
     const isNoticing = await read($, noticeAtom)
+    const showsOthers = await read($, showsOthersAtom)
     const isGuarded = await read($, guardAtom)
     const approves = await read($, approveAtom)
     const tidyAt = await read($, tidyAtAtom)
@@ -1879,6 +1989,16 @@ export function registerGlance(on: On): void {
           isNoticing
             ? 'A notice on your computer when Claude needs you, gets stuck, or finishes a job that took over a minute.'
             : 'Turn on to get a notice on your computer, even while you work in another app.',
+        )}
+        {group(
+          'others',
+          'eye',
+          'Other chats',
+          showsOthers ? 'On' : 'Off',
+          choice('others', [['off', 'Off'], ['on', 'On']], showsOthers ? 'on' : 'off', value => setOthers($, value === 'on')),
+          showsOthers
+            ? 'The band names another chat on this computer that needs you, from any project. Turn off before you share your screen.'
+            : 'Turn on to see when another chat on this computer needs you.',
         )}
         {group(
           'calm',
@@ -2625,6 +2745,31 @@ export function registerGlance(on: On): void {
 
     // Plan usage, always in view; it turns yellow, then red, as a window fills.
     const warnings: RenderChildren[] = []
+    // The other chats on this computer: one that needs the person, in amber, else how many are at work, quietly.
+    const others = isEnabled && (await read($, showsOthersAtom)) ? await read($, othersAtom) : []
+    const otherWords = otherChatsWords(others)
+    // Who needs the person comes first and is never left out for the shorter count after it: cut to whole words instead.
+    const otherLine = (room: number) => wholePieces(widthOf(otherWords[0] ?? '') <= room ? otherWords : otherWords.slice(0, 1), room)
+    if (otherWords.length > 0) {
+      const needsYou = others.some(one => one.needsYou)
+      warnings.push(
+        vector
+          ? line(
+              'others',
+              kit.icon(needsYou ? 'bell' : 'eye', needsYou ? 'warn' : 'quiet', NOTICE),
+              <Text wrap="truncate-end" dimColor={!needsYou}>
+                {otherLine(Math.floor(columns / 0.8) - 3)}
+              </Text>,
+            )
+          : (
+              <Box key="others" width={columns}>
+                <Text wrap="truncate-end" color={needsYou ? 'yellow' : undefined} dimColor={!needsYou}>
+                  {needsYou ? `${GLYPH.bell} ${otherLine(columns - 2)}` : otherLine(columns)}
+                </Text>
+              </Box>
+            ),
+      )
+    }
     // Last row: open the history, or hand this chat off to a fresh one (a second press confirms).
     const list0 = isEnabled ? await read($, checklistAtom) : null
     const canPause =
