@@ -1254,7 +1254,8 @@ test('in the Desktop app the view is a menu at the top right, and everything tha
   // Another mod's card, with words, stays under the band. (A test can't hold another mod's button; isButtonsOnly
   // below is what lets one, Replay say, join the actions.)
   let beneath: unknown = null
-  on('ui.render', () => beneath as never)
+  // Claude Code 2.1.295 takes only a tree from a ui.render hook: with no card, the engine's part is an empty Box.
+  on('ui.render', { component: 'AbovePrompt' }, () => (beneath ?? { type: 'Box', props: {}, children: [] }) as never)
   const drawn = async () => {
     const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
     const boxes = await ui.findAll({ type: 'Box' })
