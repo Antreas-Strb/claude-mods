@@ -31,7 +31,7 @@ function callTool($: Engine, input: unknown): Promise<{ deny?: string; result?: 
 
 /** The world beneath the plugin: clock, store, Haiku and every tool answer from memory. */
 function world(on: On) {
-  mock.clock(on, { now: 1_000_000 })
+  const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: true, text: 'Build my landing page', usage: {} } as never }))
   on('ui.toast', () => ({ value: undefined }) as never)
@@ -39,6 +39,7 @@ function world(on: On) {
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('classic.Notification', () => ({}) as never)
+  return clock
 }
 
 /** Turns on the detailed view: models, tokens, cache and plan usage. */
@@ -1847,7 +1848,7 @@ test('Fresh chat asks for a second press, then clears the chat and sends a hando
 
 /** A finished job in a folder whose origin is `remote`, with what Ship it sends kept in `sent`. */
 async function shipWorld($: Engine, on: On, remote: string) {
-  world(on)
+  const clock = world(on)
   const sent: string[] = []
   on('process.run', () => ({ value: { exitCode: remote ? 0 : 2, stdout: remote, stderr: '' } }) as never)
   on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
@@ -1860,7 +1861,7 @@ async function shipWorld($: Engine, on: On, remote: string) {
   await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
   await $.turn.start({ text: 'Fix the menu', turnId: 't1' })
   await callTool($, { tool: PLAN, steps: ['Fix it', 'Check it'] })
-  return sent
+  return { sent, clock }
 }
 
 const finish = async ($: Engine) => {
@@ -1870,7 +1871,7 @@ const finish = async ($: Engine) => {
 }
 
 test('Ship it shows on a finished job in a GitHub project once Finish on GitHub is on, and ships on a second press', async ($, on) => {
-  const sent = await shipWorld($, on, 'git@github.com:me/site.git\n')
+  const { sent } = await shipWorld($, on, 'git@github.com:me/site.git\n')
   // Mid-job, and with the setting off, there is no Ship it.
   await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
   expect((await texts($, 'terminal')).join('\n')).not.toContain('Ship it')
@@ -1895,6 +1896,34 @@ test('Ship it shows on a finished job in a GitHub project once Finish on GitHub 
   expect(sent[0]).toContain('gh pr checks --watch')
   expect(sent[0]).toContain('nothing to ship and stop')
   expect(sent[0]).toContain('gh pr merge --squash --delete-branch')
+})
+
+test("a timer left from an earlier press never cancels a later one, and only one button waits for its second press", async ($, on) => {
+  const { sent, clock } = await shipWorld($, on, 'https://github.com/me/site.git\n')
+  await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
+  await finish($)
+  const press = async (key: string) => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key })
+    await ui.unmount()
+  }
+  const shown = async () => (await texts($, 'terminal')).join('\n')
+
+  // Arm, ship 7 seconds later, arm again: the first press's timer, due a second later, leaves the new one waiting.
+  await press('ship')
+  await clock.advance(7000)
+  await press('ship')
+  expect(sent).toHaveLength(1)
+  await press('ship')
+  await clock.advance(1500)
+  expect(await shown()).toContain('Press again to ship')
+
+  // Arming Fresh chat disarms Ship it.
+  await press('handoff')
+  const both = await shown()
+  expect(both).toContain('Press again to start a fresh chat')
+  expect(both).not.toContain('Press again to ship')
+  expect(both).toContain('⇡ Ship it')
 })
 
 test('Ship it stays hidden in a folder that does not push to GitHub', async ($, on) => {

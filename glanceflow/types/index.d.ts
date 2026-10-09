@@ -186,8 +186,10 @@ declare module 'claude-code' {
       tick: number
       usage: GlanceUsage
       historyView: GlanceHistoryView | null
-      /** The Fresh chat button: `armed` waits for a second press to confirm. */
-      handoffState: 'idle' | 'armed' | 'working'
+      /** The Fresh chat button: `working` while the handoff note is written. */
+      handoffState: 'idle' | 'working'
+      /** The button that waits for a second press to confirm, if any. */
+      armedButton: 'handoff' | 'ship' | null
       /** Alerts: `chime` plays a short sound when Claude needs you, gets stuck or finishes a long job; `voice` also says it. */
       soundMode: 'off' | 'chime' | 'voice'
       /** Desktop notices: the computer's own notification when Claude needs you, gets stuck or finishes a long job. */
@@ -206,8 +208,6 @@ declare module 'claude-code' {
       shipsOnGithub: boolean
       /** Whether this session's folder pushes to GitHub; Ship it shows only then. */
       hasGithub: boolean
-      /** The Ship it button: `armed` waits for a second press to confirm. */
-      shipState: 'idle' | 'armed'
       /** How full the chat gets, in percent, before the band offers to tidy it up; 0 never offers. */
       tidyAt: number
       /** When the last checkpoint was saved before tidying up; null when none was. */

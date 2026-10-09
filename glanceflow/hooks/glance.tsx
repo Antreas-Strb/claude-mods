@@ -181,9 +181,9 @@ const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off
 const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
 const guardAtom = atom({ plugin: 'glanceflow', key: 'isGuarded' } as const, true)
 const approveAtom = atom({ plugin: 'glanceflow', key: 'approvePlan' } as const, false)
-const shipsAtom = atom({ plugin: 'glanceflow', key: 'shipsOnGithub' } as const, false)
+const shipOnGithubAtom = atom({ plugin: 'glanceflow', key: 'shipsOnGithub' } as const, false)
 const hasGithubAtom = atom({ plugin: 'glanceflow', key: 'hasGithub' } as const, false)
-const shipAtom = atom({ plugin: 'glanceflow', key: 'shipState' } as const, 'idle')
+const armedAtom = atom({ plugin: 'glanceflow', key: 'armedButton' } as const, null)
 const noticeAtom = atom({ plugin: 'glanceflow', key: 'isNoticing' } as const, false)
 const tourAtom = atom({ plugin: 'glanceflow', key: 'tourStep' } as const, null)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
@@ -262,6 +262,8 @@ let failuresInARow = 0
 // A message held back for a password: memory only, never stored, and only to let the same one through on a resend.
 let heldMessage: { text: string; at: number } | null = null
 let limitLevel = 0
+// The press that armed the button now waiting: a timer left from an earlier press must not disarm a later one.
+let armedPress = 0
 // The main loop's running turn, for the Pause button; and whether a pause asked for its end.
 let runningTurn: string | undefined
 let isPausing = false
@@ -652,14 +654,19 @@ const pauseJob = async ($: $) => {
   }
 }
 
-/** Sends "continue" for the person: the same job goes on, nothing to type. */
-const continueJob = async ($: $) => {
+/** Sends words as the person's own message; true when sent, otherwise onFail says what to do instead. */
+const sendAsUser = async ($: $, text: string, onFail: () => unknown) => {
   try {
-    await $.prompt.submit({ text: CONTINUE_TEXT, asUser: true })
+    await $.prompt.submit({ text, asUser: true })
+    return true
   } catch {
-    $.ui.toast("Couldn't continue right now. Type: continue")
+    await onFail()
+    return false
   }
 }
+
+/** Sends "continue" for the person: the same job goes on, nothing to type. */
+const continueJob = ($: $) => sendAsUser($, CONTINUE_TEXT, () => $.ui.toast("Couldn't continue right now. Type: continue"))
 
 /** Loads one day of this project's history into the pane, and opens the pane when asked. */
 const showHistory = async ($: $, day: string, isOpening: boolean) => {
@@ -717,18 +724,24 @@ const showReport = async ($: $, isShown: boolean, text: string, surface?: Render
   )
 }
 
-/** First press arms the Fresh chat button; a second press within 8 seconds starts the handoff. */
-const pressHandoff = async ($: $) => {
-  const state = await read($, handoffAtom)
-  if (state === 'working') return
-  if (state === 'idle') {
-    await update($, handoffAtom, () => 'armed')
-    $.clock.after(HANDOFF_CONFIRM_MS, () => {
-      void update($, handoffAtom, current => (current === 'armed' ? 'idle' : current))
-    })
+/** First press arms a button that ends or sends something; a second press within 8 seconds runs it. One waits at a time. */
+const pressTwice = async ($: $, key: 'handoff' | 'ship', run: () => Promise<unknown>) => {
+  if ((await read($, armedAtom)) === key) {
+    await update($, armedAtom, () => null)
+    await run()
     return
   }
-  await startFreshChat($)
+  const press = ++armedPress
+  await update($, armedAtom, () => key)
+  $.clock.after(HANDOFF_CONFIRM_MS, () => {
+    if (press === armedPress) void update($, armedAtom, () => null)
+  })
+}
+
+/** Fresh chat asks for a second press; while the handoff note is being written, presses wait. */
+const pressHandoff = async ($: $) => {
+  if ((await read($, handoffAtom)) === 'working') return
+  await pressTwice($, 'handoff', () => startFreshChat($))
 }
 
 /** Writes a handoff note over this chat, clears it, and sends the note as the fresh chat's first message. */
@@ -750,13 +763,11 @@ const startFreshChat = async ($: $) => {
       $.ui.toast("Couldn't clear the chat. Type /glanceflow handoff note to get the handoff note.")
       return
     }
-    try {
-      await $.prompt.submit({ text: note, asUser: true })
-      $.ui.toast('Fresh chat started from a handoff note.')
-    } catch {
+    const isSent = await sendAsUser($, note, async () => {
       await $.prompt.fill({ text: note })
       $.ui.toast('Chat cleared. The handoff note is in the prompt box: press Enter to send it.')
-    }
+    })
+    if (isSent) $.ui.toast('Fresh chat started from a handoff note.')
   } finally {
     await update($, handoffAtom, () => 'idle')
   }
@@ -994,34 +1005,20 @@ const setGuard = async ($: $, isOn: boolean) => {
   await $.store.set(GUARD_KEY, isOn)
 }
 
-/** Approve the plan first: Claude lays out its plan, then waits for Start or a change. */
-const setShips = async ($: $, isOn: boolean) => {
-  await update($, shipsAtom, () => isOn)
+/** Finish on GitHub: a finished job in a GitHub project offers Ship it. */
+const setShipOnGithub = async ($: $, isOn: boolean) => {
+  await update($, shipOnGithubAtom, () => isOn)
   await $.store.set(SHIP_KEY, isOn)
 }
 
-/** First press arms Ship it; a second press within 8 seconds sends the close-out as the person's own message. */
-const pressShip = async ($: $) => {
-  if ((await read($, shipAtom)) === 'idle') {
-    await update($, shipAtom, () => 'armed')
-    $.clock.after(HANDOFF_CONFIRM_MS, () => {
-      void update($, shipAtom, () => 'idle')
-    })
-    return
-  }
-  await update($, shipAtom, () => 'idle')
-  await shipIt($)
-}
-
-const shipIt = async ($: $) => {
-  try {
-    await $.prompt.submit({ text: SHIP_PROMPT, asUser: true })
-  } catch {
+/** Sends the close-out as the person's own message: cleanup, commit, pull request, merge once checks pass. */
+const shipIt = ($: $) =>
+  sendAsUser($, SHIP_PROMPT, async () => {
     await $.prompt.fill({ text: SHIP_PROMPT })
     $.ui.toast('The ship-it steps are in the prompt box: press Enter to send them.')
-  }
-}
+  })
 
+/** Approve the plan first: Claude lays out its plan, then waits for Start or a change. */
 const setApprove = async ($: $, isOn: boolean) => {
   await update($, approveAtom, () => isOn)
   await $.store.set(APPROVE_KEY, isOn)
@@ -1038,13 +1035,7 @@ const holdForApproval = async ($: $): Promise<boolean> => {
 }
 
 /** The person approves the plan: the same job starts. */
-const startPlan = async ($: $) => {
-  try {
-    await $.prompt.submit({ text: START_TEXT, asUser: true })
-  } catch {
-    $.ui.toast("Couldn't start right now. Type: start")
-  }
-}
+const startPlan = ($: $) => sendAsUser($, START_TEXT, () => $.ui.toast("Couldn't start right now. Type: start"))
 
 /** Picks Simple, Details or Off directly, as the settings panel does. */
 const setView = async ($: $, view: 'simple' | 'detailed' | 'off') => {
@@ -1072,7 +1063,7 @@ const resetSettings = async ($: $) => {
   await setCalm($, false)
   await setGuard($, true)
   await setApprove($, false)
-  await setShips($, false)
+  await setShipOnGithub($, false)
   await setTidyAt($, TIDY_AT_DEFAULT)
   $.ui.toast('Settings are back to their defaults.')
 }
@@ -1201,7 +1192,7 @@ export function registerGlance(on: On): void {
     const approves = (await $.store.get(APPROVE_KEY)) === true
     await update($, approveAtom, () => approves)
     const ships = (await $.store.get(SHIP_KEY)) === true
-    await update($, shipsAtom, () => ships)
+    await update($, shipOnGithubAtom, () => ships)
     const origin = await $.process.run(['git', 'remote', 'get-url', 'origin']).catch(() => ({ exitCode: 1, stdout: '' }))
     await update($, hasGithubAtom, () => origin.exitCode === 0 && /github\.com[:/]/.test(origin.stdout))
     const isNoticing = (await $.store.get(NOTICE_KEY)) === true
@@ -1346,8 +1337,8 @@ export function registerGlance(on: On): void {
         void shipIt($)
         return { text: 'Shipping on GitHub…' }
       }
-      const isOn = toggled(choice, await read($, shipsAtom))
-      await setShips($, isOn)
+      const isOn = toggled(choice, await read($, shipOnGithubAtom))
+      await setShipOnGithub($, isOn)
       return {
         text: isOn
           ? 'A finished job now offers Ship it: commit, pull request, and merge once checks pass.'
@@ -1944,7 +1935,7 @@ export function registerGlance(on: On): void {
     const showsOthers = await read($, showsOthersAtom)
     const isGuarded = await read($, guardAtom)
     const approves = await read($, approveAtom)
-    const ships = await read($, shipsAtom)
+    const ships = await read($, shipOnGithubAtom)
     const tidyAt = await read($, tidyAtAtom)
     const checkpointAt = await read($, checkpointAtom)
     const usage = await read($, usageAtom)
@@ -2110,7 +2101,7 @@ export function registerGlance(on: On): void {
           'ship',
           'Finish on GitHub',
           ships ? 'On' : 'Off',
-          choice('ship', [['off', 'Off'], ['on', 'On']], ships ? 'on' : 'off', value => setShips($, value === 'on')),
+          choice('ship', [['off', 'Off'], ['on', 'On']], ships ? 'on' : 'off', value => setShipOnGithub($, value === 'on')),
           ships
             ? 'A finished job offers Ship it: Claude tidies the changes, opens a pull request and merges once checks pass.'
             : 'Finished jobs stay on their branch. Turn on for a Ship it button in GitHub projects.',
@@ -2825,8 +2816,8 @@ export function registerGlance(on: On): void {
     const isDetailed = isEnabled && (await read($, detailAtom)) === 'detailed'
     const isCalm = isEnabled && (await read($, calmAtom))
     const handoff = isEnabled ? await read($, handoffAtom) : 'idle'
-    const ship = isEnabled ? await read($, shipAtom) : 'idle'
-    const canShip = isEnabled && (await read($, shipsAtom)) && (await read($, hasGithubAtom))
+    const armed = isEnabled ? await read($, armedAtom) : null
+    const canShip = isEnabled && (await read($, shipOnGithubAtom)) && (await read($, hasGithubAtom))
     const columns = Math.max(20, e.props.bodyColumns)
     const current = await now($)
 
@@ -2892,7 +2883,7 @@ export function registerGlance(on: On): void {
         <Button key={key} plain label={short ?? `${GLYPH[icon]} ${label}`} onPress={onPress} />
       )
     const handoffLabel =
-      handoff === 'armed' ? 'Press again to start a fresh chat' : handoff === 'working' ? 'Writing a handoff note…' : 'Fresh chat'
+      armed === 'handoff' ? 'Press again to start a fresh chat' : handoff === 'working' ? 'Writing a handoff note…' : 'Fresh chat'
     // What steers the job (Pause, Start, Continue); elsewhere than the terminal it sits beside the job's status.
     // Elsewhere than the terminal a stuck job is tried again, and a usage limit won't lift for a press, so that
     // button stays quiet.
@@ -2915,13 +2906,13 @@ export function registerGlance(on: On): void {
     // While a stopped job's chat is full, Tidy up now is the one way offered to make room.
     const handoffItem =
       list0 !== null &&
-      (!vector || list0.phase === 'done' || (list0.phase === 'stopped' && !isChatFull) || handoff !== 'idle') &&
-      action('handoff', 'fresh', handoffLabel, () => pressHandoff($), handoff === 'idle' && columns < 40 ? '↻ Fresh' : undefined)
+      (!vector || list0.phase === 'done' || (list0.phase === 'stopped' && !isChatFull) || handoff === 'working' || armed === 'handoff') &&
+      action('handoff', 'fresh', handoffLabel, () => pressHandoff($), handoffLabel === 'Fresh chat' && columns < 40 ? '↻ Fresh' : undefined)
     // Finish on GitHub: once the job is done, one press closes it out; a merged pull request archives the chat.
     const shipItem =
       canShip &&
-      (list0?.phase === 'done' || ship === 'armed') &&
-      action('ship', 'ship', ship === 'armed' ? 'Press again to ship' : 'Ship it', () => pressShip($), undefined, ship === 'idle')
+      (list0?.phase === 'done' || armed === 'ship') &&
+      action('ship', 'ship', armed === 'ship' ? 'Press again to ship' : 'Ship it', () => pressTwice($, 'ship', () => shipIt($)), undefined, armed !== 'ship')
     // Where to go from here: the plan, the history, the settings.
     const places = isEnabled
       ? [
