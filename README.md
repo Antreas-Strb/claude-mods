@@ -46,9 +46,9 @@ The button above the prompt cycles **Simple → Details → Off**; in the Deskto
   - what each job cost, e.g. `$0.42`, where Claude Code keeps a cost (pay-as-you-go API use); the History panel shows it per job and per day
 - **Off**: Claude Code as usual. Only the password guard stays on (it has its own switch in ⚙ Settings).
 
-![GlanceFlow Details: bars fill with time and time left, a Haiku helper under its step, tokens per step and plan usage](docs/glance-details.gif)
+![GlanceFlow in Details in the Desktop app: how long each finished step took, the current step's bar with time left, and a Haiku helper under its step](docs/glance-details.png)
 
-<sub>Details on a scripted job, with time sped up. The tool rows in the chat above the checklist are not shown here.</sub>
+<sub>Drawn by GlanceFlow 0.24.6 itself, as the Desktop app shows it, for a sample job. The tool rows in the chat above the checklist are not shown here.</sub>
 
 ## What you get
 
