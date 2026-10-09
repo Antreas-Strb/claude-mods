@@ -140,7 +140,7 @@ Biggest tasks
 2. Run a quick cleanup review of the branch's changes, using ponytail-review or simplify when they are installed.
 3. Make a Conventional Commits commit on a branch, never the base branch.
 4. Open a ready pull request with Why, What changed and Verification.
-5. Run `gh pr checks --watch`, then `gh pr merge --squash --delete-branch` once every check passes.
+5. Run `gh pr checks --watch`, then `gh pr merge --squash --delete-branch` once every check passes. It never merges with `--admin` or gets around branch protection: if the merge is blocked, Claude says why and stops.
 
 The steps follow the finish flow of [Ponytail](https://github.com/DietrichGebert/ponytail), [pstack](https://github.com/backnotprop/pstack) and Cursor's thermo-nuclear code quality review. In the Desktop app, **Settings → Claude Code → Auto-archive sessions when their pull request closes** then archives the chat.
 
