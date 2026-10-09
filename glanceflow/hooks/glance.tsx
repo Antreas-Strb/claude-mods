@@ -118,6 +118,7 @@ const SOUND_KEY = 'glanceSound'
 const CALM_KEY = 'glanceCalm'
 const GUARD_KEY = 'glanceGuard'
 const APPROVE_KEY = 'glanceApprove'
+const SHIP_KEY = 'glanceShip'
 const NOTICE_KEY = 'glanceNotice'
 // Whether the band names the other chats that need the person; on unless turned off.
 const OTHERS_KEY = 'glanceOthers'
@@ -180,6 +181,9 @@ const soundAtom = atom({ plugin: 'glanceflow', key: 'soundMode' } as const, 'off
 const calmAtom = atom({ plugin: 'glanceflow', key: 'isCalm' } as const, false)
 const guardAtom = atom({ plugin: 'glanceflow', key: 'isGuarded' } as const, true)
 const approveAtom = atom({ plugin: 'glanceflow', key: 'approvePlan' } as const, false)
+const shipsAtom = atom({ plugin: 'glanceflow', key: 'shipsOnGithub' } as const, false)
+const hasGithubAtom = atom({ plugin: 'glanceflow', key: 'hasGithub' } as const, false)
+const shipAtom = atom({ plugin: 'glanceflow', key: 'shipState' } as const, 'idle')
 const noticeAtom = atom({ plugin: 'glanceflow', key: 'isNoticing' } as const, false)
 const tourAtom = atom({ plugin: 'glanceflow', key: 'tourStep' } as const, null)
 const tidyAtAtom = atom({ plugin: 'glanceflow', key: 'tidyAt' } as const, TIDY_AT_DEFAULT)
@@ -205,6 +209,20 @@ const HANDOFF_PROMPT = `Write a handoff note so a brand-new chat can carry on th
 Cover, briefly: the goal; what is already done; what is left, in order; decisions made and why; the files, commands
 or links that matter; and the very next step. Under 300 words, no preamble.
 Start with exactly: "Continuing from an earlier chat. Here is where things stand:"`
+
+// What Ship it sends, as the person's own words: the close-out a finished job needs on GitHub, so the chat archives.
+const SHIP_PROMPT = `The work is finished. Ship it on GitHub, in order, and stop at the first step that fails:
+1. Run \`git status\` and \`gh auth status\`. If this is not a GitHub repo or gh is not signed in, stop and tell me what to do.
+2. Quick cleanup of everything this branch changes against its base branch, committed or not. Use an installed review
+   skill (ponytail-review or simplify) if there is one; otherwise look yourself for dead code, needless comments,
+   pass-through wrappers and AI-sounding wording. Fix only clear wins, then run the project's tests if it has any.
+3. Commit with a Conventional Commits title, type(scope): subject. If on the base branch, make a new branch first.
+   Push the branch, never the base branch.
+4. Open a ready pull request with gh pr create, or reuse the branch's open one. Body: ## Why, ## What changed,
+   ## Verification, readable in under a minute.
+5. Wait with gh pr checks --watch. Once every check passes, or there are none, run gh pr merge --squash --delete-branch.
+   If a check fails or the merge conflicts, do not merge: show what failed and stop.
+6. End with the pull request link and one line on the result.`
 
 const CHECKPOINT_PROMPT = `This chat is about to be compacted to free up room. Write a checkpoint so the work carries on
 without losing anything that matters. Cover, briefly: the goal; what is already done; what is left, in order; decisions
@@ -975,6 +993,33 @@ const setGuard = async ($: $, isOn: boolean) => {
 }
 
 /** Approve the plan first: Claude lays out its plan, then waits for Start or a change. */
+const setShips = async ($: $, isOn: boolean) => {
+  await update($, shipsAtom, () => isOn)
+  await $.store.set(SHIP_KEY, isOn)
+}
+
+/** First press arms Ship it; a second press within 8 seconds sends the close-out as the person's own message. */
+const pressShip = async ($: $) => {
+  if ((await read($, shipAtom)) === 'idle') {
+    await update($, shipAtom, () => 'armed')
+    $.clock.after(HANDOFF_CONFIRM_MS, () => {
+      void update($, shipAtom, () => 'idle')
+    })
+    return
+  }
+  await update($, shipAtom, () => 'idle')
+  await shipIt($)
+}
+
+const shipIt = async ($: $) => {
+  try {
+    await $.prompt.submit({ text: SHIP_PROMPT, asUser: true })
+  } catch {
+    await $.prompt.fill({ text: SHIP_PROMPT })
+    $.ui.toast('The ship-it steps are in the prompt box: press Enter to send them.')
+  }
+}
+
 const setApprove = async ($: $, isOn: boolean) => {
   await update($, approveAtom, () => isOn)
   await $.store.set(APPROVE_KEY, isOn)
@@ -1025,6 +1070,7 @@ const resetSettings = async ($: $) => {
   await setCalm($, false)
   await setGuard($, true)
   await setApprove($, false)
+  await setShips($, false)
   await setTidyAt($, TIDY_AT_DEFAULT)
   $.ui.toast('Settings are back to their defaults.')
 }
@@ -1152,6 +1198,10 @@ export function registerGlance(on: On): void {
     await update($, guardAtom, () => isGuarded)
     const approves = (await $.store.get(APPROVE_KEY)) === true
     await update($, approveAtom, () => approves)
+    const ships = (await $.store.get(SHIP_KEY)) === true
+    await update($, shipsAtom, () => ships)
+    const origin = await $.process.run(['git', 'remote', 'get-url', 'origin']).catch(() => ({ exitCode: 1, stdout: '' }))
+    await update($, hasGithubAtom, () => origin.exitCode === 0 && /github\.com[:/]/.test(origin.stdout))
     const isNoticing = (await $.store.get(NOTICE_KEY)) === true
     await update($, noticeAtom, () => isNoticing)
     const showsOthers = (await $.store.get(OTHERS_KEY)) !== false
@@ -1219,7 +1269,7 @@ export function registerGlance(on: On): void {
     await $.command.register({
       name: 'glanceflow',
       description:
-        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, others on|off, calm on|off, guard on|off, approve on|off, week, tour, pause, continue, plan, checkpoint, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
+        'GlanceFlow: /glanceflow on|off, details on|off, sound on|voice|off, notify on|off, others on|off, calm on|off, guard on|off, approve on|off, ship on|off, week, tour, pause, continue, plan, checkpoint, settings, tidy [at N|off], history [yesterday|YYYY-MM-DD], handoff',
     })
     // A reload drops the module's timers; pick the animation back up.
     syncTicker($, await read($, checklistAtom))
@@ -1286,6 +1336,20 @@ export function registerGlance(on: On): void {
         text: isOn
           ? 'Claude now shows its plan and waits: press Start, or tell Claude what to change.'
           : 'Claude starts right after laying out its plan.',
+      }
+    }
+    if (arg.startsWith('ship')) {
+      const choice = arg.slice('ship'.length).trim()
+      if (choice === '') {
+        void shipIt($)
+        return { text: 'Shipping on GitHub…' }
+      }
+      const isOn = toggled(choice, await read($, shipsAtom))
+      await setShips($, isOn)
+      return {
+        text: isOn
+          ? 'A finished job now offers Ship it: commit, pull request, and merge once checks pass.'
+          : 'Ship it is off. Finished jobs stay on their branch.',
       }
     }
     if (arg === 'week') {
@@ -1878,6 +1942,7 @@ export function registerGlance(on: On): void {
     const showsOthers = await read($, showsOthersAtom)
     const isGuarded = await read($, guardAtom)
     const approves = await read($, approveAtom)
+    const ships = await read($, shipsAtom)
     const tidyAt = await read($, tidyAtAtom)
     const checkpointAt = await read($, checkpointAtom)
     const usage = await read($, usageAtom)
@@ -2037,6 +2102,16 @@ export function registerGlance(on: On): void {
           approves
             ? `Claude shows its plan and waits. Press ${vector ? 'Start' : '▶ Start'}, or tell Claude what to change.`
             : 'Claude starts right after laying out its plan.',
+        )}
+        {group(
+          'ship',
+          'ship',
+          'Finish on GitHub',
+          ships ? 'On' : 'Off',
+          choice('ship', [['off', 'Off'], ['on', 'On']], ships ? 'on' : 'off', value => setShips($, value === 'on')),
+          ships
+            ? 'A finished job offers Ship it: Claude tidies the changes, opens a pull request and merges once checks pass.'
+            : 'Finished jobs stay on their branch. Turn on for a Ship it button in GitHub projects.',
         )}
         {group(
           'guard',
@@ -2748,6 +2823,8 @@ export function registerGlance(on: On): void {
     const isDetailed = isEnabled && (await read($, detailAtom)) === 'detailed'
     const isCalm = isEnabled && (await read($, calmAtom))
     const handoff = isEnabled ? await read($, handoffAtom) : 'idle'
+    const ship = isEnabled ? await read($, shipAtom) : 'idle'
+    const canShip = isEnabled && (await read($, shipsAtom)) && (await read($, hasGithubAtom))
     const columns = Math.max(20, e.props.bodyColumns)
     const current = await now($)
 
@@ -2838,6 +2915,11 @@ export function registerGlance(on: On): void {
       list0 !== null &&
       (!vector || list0.phase === 'done' || (list0.phase === 'stopped' && !isChatFull) || handoff !== 'idle') &&
       action('handoff', 'fresh', handoffLabel, () => pressHandoff($), handoff === 'idle' && columns < 40 ? '↻ Fresh' : undefined)
+    // Finish on GitHub: once the job is done, one press closes it out; a merged pull request archives the chat.
+    const shipItem =
+      canShip &&
+      (list0?.phase === 'done' || ship === 'armed') &&
+      action('ship', 'ship', ship === 'armed' ? 'Press again to ship' : 'Ship it', () => pressShip($), undefined, ship === 'idle')
     // Where to go from here: the plan, the history, the settings.
     const places = isEnabled
       ? [
@@ -2846,6 +2928,7 @@ export function registerGlance(on: On): void {
           action('history', 'history', 'History', () => showHistory($, dayKey(current), true)),
           action('settings', 'sliders', 'Settings', () => showSettings($), columns < 60 ? '⚙' : undefined),
           !vector && handoffItem,
+          !vector && shipItem,
         ].filter(Boolean)
       : []
     const actionItems = isEnabled ? [...controls, ...places] : null
@@ -2995,6 +3078,7 @@ export function registerGlance(on: On): void {
             {lifted.buttons as RenderElement[]}
             {isChatFull && tidy}
             {handoffItem}
+            {shipItem}
             {controls}
           </Box>
         </Box>

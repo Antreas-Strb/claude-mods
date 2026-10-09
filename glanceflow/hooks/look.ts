@@ -54,6 +54,7 @@ const PATHS = {
   sub: '<path d="M7 5v7a3 3 0 0 0 3 3h7.5"/><path d="M14.6 12l3 3-3 3"/>',
   spark: '<path d="M12 4.5c.5 3.9 3.6 7 7.5 7.5-3.9.5-7 3.6-7.5 7.5-.5-3.9-3.6-7-7.5-7.5 3.9-.5 7-3.6 7.5-7.5z"/>',
   bookmark: '<path d="M7 4.5h10a1 1 0 0 1 1 1v14l-6-4-6 4v-14a1 1 0 0 1 1-1z"/>',
+  ship: '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/><circle cx="17" cy="12" r="2.2"/><path d="M7 8.2v7.6"/><path d="M7 8.2c0 2.8 2.6 3.8 7.8 3.8"/>',
   more: '<path d="M6.4 12h.01M12 12h.01M17.6 12h.01" stroke-width="3.4"/>',
 } as const
 
@@ -85,6 +86,7 @@ export const GLYPH: Record<IconName, string> = {
   sub: '↳',
   spark: '✦',
   bookmark: '◆',
+  ship: '⇡',
   more: '…',
 }
 

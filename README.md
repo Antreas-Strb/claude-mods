@@ -55,6 +55,7 @@ The button above the prompt cycles **Simple → Details → Off**; in the Deskto
 - **Made for the Desktop app:** in the Code tab, GlanceFlow draws its own icons, progress rings and slim bars, and lays its rows out for the app's font, so columns line up. Every header reads the same way: the state in bold, then the job and how far it is (`Working · Build my landing page · 2 of 4 done · about 2m left`). When the band is narrow, a header leaves out whole pieces rather than cut a word, and its bold words get shorter but stay whole (`In the background`, then `Background`). A screen reader reads each thing once: a line under a step starts in empty room, and an icon's label never repeats the words beside it (the current step's icon says `Now`, a warning's says `Notice`). The current step has a blue mark and the only bar; finished steps get a green ringed check; amber always means Claude needs you. The colour sits in the icon, and the words keep the app's text colour, so they read on a light window too. Every control is the app's own button. The **View** menu (Simple, Detailed or Off) sits at the top right; under the checklist the places to go (**Plan**, **History**, **Settings**) sit on the left, and everything that acts sits together on the right: **Where we left off** after a tidy-up, **Tidy up now**, **Fresh chat**, then **Pause**, **Continue** or **Start**, the main one last. Another mod that draws only buttons (Replay, say) has them join that group. The welcome cards and the empty band keep the same layout. **Fresh chat** shows once the job has stopped or finished; while a stopped job's chat is full, **Tidy up now** takes its place. At a usage limit the button reads **Check again**. Settings are rows with a menu each, as on a Mac. The panels have no extra Close buttons, since the app's own × closes them. The terminal keeps its one-cell symbols: where this README writes **▤ Plan**, **≣ History**, **⚙ Settings**, **‖ Pause** or **▶ Continue**, the Desktop app shows the same button by its name alone.
 - **Plan first:** before Claude uses a tool, it lays out 2 to 8 plain-English steps. A quick question needs no plan.
 - **Approve the plan first (optional):** turn it on in ⚙ Settings or with `/glanceflow approve on`, and Claude shows its plan and waits. Press **▶ Start**, or tell Claude what to change and it lays out a new plan.
+- **Finish on GitHub (optional):** turn it on in ⚙ Settings or with `/glanceflow ship on`. In a project that pushes to GitHub, a finished job offers **⇡ Ship it**. Press it twice and Claude tidies the changes, commits, opens a pull request, waits for the checks and squash-merges. If a check fails it stops and shows why. With the Desktop app's auto-archive on, the merged pull request archives the chat, so finished chats don't pile up.
 - **Live progress:** each step's meter fills as Claude reports progress. The header shows how far along the job is (the percentage in the terminal; steps done in the Desktop app, where the ring beside it fills) and about how long is left: from the first step once History knows how fast your steps go in this project (a few finished jobs), otherwise after two steps. A step that runs past its usual time says `taking longer` instead of a guess, and the total waits until it can be estimated again. A plan of more than five steps folds its finished steps, and the steps after the next one, into a line each; **▤ Plan** shows them all.
 - **What Claude is doing right now:** a quiet line says it in one whole sentence: Claude's own description when it fits, like `Now: Check the page on a phone screen`, otherwise a short phrase like `Reading files (3)` or `Running the tests`. No file names or commands. In the terminal it sits under the current step; in the Desktop app it follows the step's bar.
 - **What each step got done:** when a step is checked off, Claude adds one plain-English line on what it did ("Added a pricing table with three plans"). It shows under the step until Claude moves on, and goes into the History and the Team report.
@@ -132,6 +133,17 @@ Biggest tasks
 
 **↻ Fresh chat** under the checklist (or `/glanceflow handoff`), shown once the chat has some work in it (in the Desktop app, once the job has stopped or finished; while a stopped job's chat is full, Tidy up now takes its place), moves the work to a fresh chat: when a chat is too long, close to its limits, or whenever you want a clean start. Press it twice (the first press asks to confirm). Claude writes a short handoff note (goal, what is done, what is left, decisions, the next step), the chat is cleared, and the note is sent as the fresh chat's first message. The note is also saved: `/glanceflow handoff note` puts the last one back in the prompt box.
 
+## Ship it (Finish on GitHub)
+
+**⇡ Ship it** shows once a job is done, when **Finish on GitHub** is on and the project pushes to GitHub (or use `/glanceflow ship`). The first press arms it, and a second press within 8 seconds sends Claude the close-out:
+1. Check git and `gh` sign-in.
+2. Run a quick cleanup review of the branch's changes, using ponytail-review or simplify when they are installed.
+3. Make a Conventional Commits commit on a branch, never the base branch.
+4. Open a ready pull request with Why, What changed and Verification.
+5. Run `gh pr checks --watch`, then `gh pr merge --squash --delete-branch` once every check passes.
+
+The steps follow the finish flow of [Ponytail](https://github.com/DietrichGebert/ponytail), [pstack](https://github.com/backnotprop/pstack) and Cursor's thermo-nuclear code quality review. In the Desktop app, **Settings → Claude Code → Auto-archive sessions when their pull request closes** then archives the chat.
+
 ## Commands
 
 | Command | What it does |
@@ -146,7 +158,7 @@ Biggest tasks
 | `/glanceflow tour` | Shows the three welcome cards again |
 | `/glanceflow pause`, `/glanceflow continue` | Pauses Claude, or picks the job up again |
 | `/glanceflow plan` | Opens the whole plan in a side panel |
-| `/glanceflow settings` | Opens the settings: view, sounds, desktop notices, other chats, calm mode, plan approval, password guard and when to tidy up |
+| `/glanceflow settings` | Opens the settings: view, sounds, desktop notices, other chats, calm mode, plan approval, Finish on GitHub, password guard and when to tidy up |
 | `/glanceflow tidy` | Saves a checkpoint, then tidies up the chat |
 | `/glanceflow checkpoint` | Shows where we left off: the checkpoint saved before the last tidy-up |
 | `/glanceflow tidy at 60`, `/glanceflow tidy off` | When the checklist offers to tidy up |
@@ -158,6 +170,8 @@ Biggest tasks
 | `/glanceflow others on`, `/glanceflow others off` | Whether the band names another chat on this computer that needs you |
 | `/glanceflow guard on`, `/glanceflow guard off` | Turns the password guard on or off |
 | `/glanceflow approve on`, `/glanceflow approve off` | Claude waits for ▶ Start before it works, or starts right away |
+| `/glanceflow ship on`, `/glanceflow ship off` | Whether a finished job in a GitHub project offers ⇡ Ship it |
+| `/glanceflow ship` | Ships now: cleanup, commit, pull request, merge once checks pass |
 
 The button above the prompt cycles Simple, Details and Off; in the Desktop app the View menu at the top right picks Simple, Detailed or Off.
 

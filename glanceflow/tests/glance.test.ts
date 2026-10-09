@@ -1845,6 +1845,64 @@ test('Fresh chat asks for a second press, then clears the chat and sends a hando
   expect((await texts($, 'terminal')).join('\n')).toContain('↻ Fresh chat')
 })
 
+/** A finished job in a folder whose origin is `remote`, with what Ship it sends kept in `sent`. */
+async function shipWorld($: Engine, on: On, remote: string) {
+  world(on)
+  const sent: string[] = []
+  on('process.run', () => ({ value: { exitCode: remote ? 0 : 2, stdout: remote, stderr: '' } }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('prompt.submit', (_, e) => {
+    sent.push(e.text)
+    return { text: e.text }
+  })
+  await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
+  await $.turn.start({ text: 'Fix the menu', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Fix it', 'Check it'] })
+  return sent
+}
+
+const finish = async ($: Engine) => {
+  await callTool($, { tool: PROGRESS, task: 'Fix it', percent: 100 })
+  await callTool($, { tool: PROGRESS, task: 'Check it', percent: 100 })
+  await $.turn.complete({ answer: 'The menu is fixed.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+}
+
+test('Ship it shows on a finished job in a GitHub project once Finish on GitHub is on, and ships on a second press', async ($, on) => {
+  const sent = await shipWorld($, on, 'git@github.com:me/site.git\n')
+  // Mid-job, and with the setting off, there is no Ship it.
+  await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
+  expect((await texts($, 'terminal')).join('\n')).not.toContain('Ship it')
+  await $.command.run({ command: 'glanceflow', args: 'ship off' } as never)
+  await finish($)
+  for (const surface of SURFACES) expect((await texts($, surface)).join('\n')).not.toContain('Ship it')
+
+  await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
+  expect((await texts($, 'terminal')).join('\n')).toContain('⇡ Ship it')
+  expect(await texts($, 'desktop')).toContain('Ship it')
+
+  const press = async () => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key: 'ship' })
+    await ui.unmount()
+  }
+  await press()
+  expect((await texts($, 'terminal')).join('\n')).toContain('Press again to ship')
+  expect(sent).toEqual([])
+  await press()
+  expect(sent).toHaveLength(1)
+  expect(sent[0]).toContain('gh pr checks --watch')
+  expect(sent[0]).toContain('gh pr merge --squash --delete-branch')
+})
+
+test('Ship it stays hidden in a folder that does not push to GitHub', async ($, on) => {
+  await shipWorld($, on, '')
+  await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
+  await finish($)
+  for (const surface of SURFACES) expect((await texts($, surface)).join('\n')).not.toContain('Ship it')
+})
+
 test('Pause stops the running turn; Continue picks the same job up without typing', async ($, on) => {
   world(on)
   let aborted = ''
@@ -3192,8 +3250,11 @@ test('⚙ Settings opens one panel for the view, sounds and calm mode, each with
   expect(shown).toContain('No sounds')
   expect(shown).toContain('Bars and spinners move')
   expect(shown).toContain('● 50%')
+  expect(shown).toContain('Finish on GitHub')
+  expect(shown).toContain('Finished jobs stay on their branch')
 
   await pick('view-detailed')
+  await pick('ship-on')
   await pick('sound-chime')
   await pick('calm-on')
   shown = await settingsTexts()
@@ -3202,6 +3263,7 @@ test('⚙ Settings opens one panel for the view, sounds and calm mode, each with
   expect(shown).toContain('A short chime when Claude needs you')
   expect(shown).toContain('▶ Play it')
   expect(shown).toContain('Nothing on screen moves')
+  expect(shown).toContain('merges once checks pass')
   expect(shown).toContain('● On')
   expect(played).toEqual(['sounds/needs-you.wav'])
   expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Details')
