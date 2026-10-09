@@ -127,6 +127,29 @@ export function dayEntries(stored: unknown): GlanceHistoryEntry[] {
   return Array.isArray(stored) ? (stored as GlanceHistoryEntry[]) : []
 }
 
+/** The store key of one chat's jobs on a day: each chat rewrites only its own, so two chats never lose each other's. */
+export function historyKey(day: string, sessionId: string): string {
+  return `${HISTORY_PREFIX}${day}:${sessionId}`
+}
+
+/** The day a history key is for. */
+export function historyDay(key: string): string {
+  return key.slice(HISTORY_PREFIX.length, HISTORY_PREFIX.length + 'YYYY-MM-DD'.length)
+}
+
+/** Keys from before 0.25, when every chat's jobs of a day shared one key. */
+export function sharedDayKeys(keys: readonly string[]): string[] {
+  return keys.filter(key => key.startsWith(HISTORY_PREFIX) && key.length === HISTORY_PREFIX.length + 'YYYY-MM-DD'.length)
+}
+
+/** The jobs of several stored lists, each once (the later list's copy wins), oldest first. */
+export function mergedEntries(stored: readonly unknown[]): GlanceHistoryEntry[] {
+  const byJob = new Map<string, GlanceHistoryEntry>()
+  for (const one of stored.flatMap(dayEntries)) byJob.set(one.jobId, one)
+
+  return [...byJob.values()].sort((a, b) => a.startedAt - b.startedAt)
+}
+
 /** The day's entries with this one added, or replacing its earlier self. */
 export function upsertEntry(entries: unknown, entry: GlanceHistoryEntry): GlanceHistoryEntry[] {
   return [...dayEntries(entries).filter(one => one.jobId !== entry.jobId), entry].sort((a, b) => a.startedAt - b.startedAt)
