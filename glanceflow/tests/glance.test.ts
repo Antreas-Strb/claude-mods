@@ -473,7 +473,7 @@ test('the question shown is Claude\'s last sentence, plain and short, with secre
   expect(questionOf('Two options:\n\n1. Postgres\n2. SQLite\n\n**Which do you prefer?**')).toBe('Which do you prefer?')
   // A last sentence of a few words keeps its paragraph, so it still makes sense alone.
   expect(questionOf('Both pass locally and in CI. Merge? ')).toBe('Both pass locally and in CI. Merge?')
-  expect(questionOf('Should I use the key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 for this call?')).not.toContain('abcdefghijkl')
+  expect(questionOf(`Should I use the key ${fakeKey(32)} for this call?`)).not.toContain('abcdefghijkl')
   expect(questionOf(`Do you want ${'a very long thing '.repeat(20)}done?`)?.length).toBeLessThanOrEqual(160)
   expect(questionOf('The page is ready.')).toBeNull()
   expect(questionOf('')).toBeNull()
