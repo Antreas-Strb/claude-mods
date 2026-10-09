@@ -83,25 +83,33 @@ The checklist also survives closing Claude Code: resume the chat (`claude --resu
 
 **▤ Plan** under the checklist (or `/glanceflow plan`) opens the whole plan in a side panel, with what the checklist has no room for: when the job started and about when it will be done, every step however long the plan, with long names shown whole, what each finished step got done and how long it took, about how long each step still to come should take, what Claude is doing now in its own words, and every helper. In Details it adds the command or file Claude is working on, tokens per step, the job's cost and plan usage. It stays live while Claude works, so the checklist above the prompt can stay short.
 
-![The Plan panel: every step with what it got done, its time, and what Claude is doing now](docs/glanceflow-plan.png)
+![The Plan panel in the Desktop app: every step with what it got done and its time, what Claude is doing now, the files it changed and a helper at work](docs/glanceflow-plan.png)
+
+<sub>Drawn by GlanceFlow 0.24.6 itself, as the Desktop app shows it, for a sample job.</sub>
 
 ## Settings
 
 **⚙ Settings** under the checklist (or `/glanceflow settings`) puts every choice in one panel. Each shows what is picked and a line on what that choice does: the view (Simple, Details or Off), sounds (with ▶ Play it to hear them), desktop notices, calm mode, whether to approve the plan first, the password guard, and when to tidy up the chat (never, or at 40, 50, 60 or 75% full), with a **Tidy up now** button. Changes apply right away and stay for your next chats.
 
-![The settings panel: view, sounds, desktop notices, calm mode, plan approval, password guard and when to tidy up](docs/glanceflow-settings.png)
+![The Settings panel in the Desktop app: a menu for each choice, from the view and sounds to the password guard and when to tidy up](docs/glanceflow-settings.png)
+
+<sub>Drawn by GlanceFlow 0.24.6 itself, as the Desktop app shows it, for a sample job.</sub>
 
 ## History for a retro
 
 **≣ History** under the checklist (or `/glanceflow history`) opens a side panel with today's jobs in this project: when each started, how it ended (✓ done, ■ stopped, ⚠ stuck), steps done, how long it took and its tokens, the files it added or changed, with the day's totals at the bottom.
 
-![The History panel: the day's jobs with start time, outcome, steps, time and tokens, the day picker and the totals](docs/glance-history.png)
+![The History panel in the Desktop app: the day's jobs with start time, outcome, steps, time and files changed, the day picker and the totals](docs/glance-history.png)
+
+<sub>Drawn by GlanceFlow 0.24.6 itself, as the Desktop app shows it, for a sample job.</sub>
 
 In the panel, **◀ Earlier**, the day drop-down, **Later ▶** and **Today** move between days (or type `/glanceflow history yesterday`, `/glanceflow history 2026-10-06`). The history stays on this computer and keeps 30 days.
 
 **Team report** turns the day into a short update in plain words for the team, a manager or a CEO, and copies it to paste into Slack, Teams or an email: what got done (step by step, in Claude's words), what is still open and what is next, what needs a decision, and the time spent. **This week** switches it to the 7 days up to the day picked, for a weekly update or a retro. In the Desktop app the buttons read **Day report** and **Week report**. No tokens, models or file names, and quick questions are left out.
 
-![The Team report: what got done, what is still open, what needs a decision, and the time spent](docs/glance-team-report.png)
+![The Team report in the Desktop app: what got done, what is still open and the time spent, with Copy report](docs/glance-team-report.png)
+
+<sub>Drawn by GlanceFlow 0.24.6 itself, as the Desktop app shows it, for a sample job.</sub>
 
 **Your week** (or `/glanceflow week`; **All projects this week** in the Desktop app) is a short summary just for you, across every project: how many steps Claude checked off in how many tasks, the time at work, your busiest day and the biggest tasks. It covers the 7 days up to the day picked and is copied, ready to keep or share.
 
