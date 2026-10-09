@@ -1,4 +1,4 @@
-import type { GlanceChecklist, GlanceHelper, GlanceHistoryView, GlanceTask, GlanceTaskSize, GlanceUsage } from '../types'
+import type { GlanceChecklist, GlanceHelper, GlanceHistoryView, GlanceOtherChat, GlanceTask, GlanceTaskSize, GlanceUsage } from '../types'
 import { SIZE_WEIGHT, teamReport, weekSummary } from './history'
 import { maskPrivate } from './privacy'
 
@@ -607,3 +607,46 @@ export const reportOf = (view: GlanceHistoryView) =>
 
 /** The value that `/glanceflow <setting> on` or `off` asks for. With neither word, the opposite of the current value. */
 export const toggled = (choice: string, current: boolean) => (choice === 'on' ? true : choice === 'off' ? false : !current)
+
+/** A chat's checklist as kept for when the chat is resumed, and for the other chats to see; `isOpen` until it ends. */
+export type SavedChecklist = { at: number; list: GlanceChecklist; isOpen?: boolean }
+
+// Each chat's checklist sits under a key of its own: two chats saving at once never drop each other's.
+export const RESUME_PREFIX = 'resume:'
+
+/** The keys of saved checklists, `[key, at]`, beyond the `keep` most recent. */
+export function staleResumeKeys(saved: readonly (readonly [string, number])[], keep: number): string[] {
+  return [...saved].sort((a, b) => b[1] - a[1]).slice(keep).map(([key]) => key)
+}
+
+// A chat at work saves its checklist with every step and tool it runs; one silent this long has most likely closed.
+export const OTHER_WORKING_MS = 10 * 60_000
+// shortcut: a chat that closed without ending (a crash, a closed terminal tab) shows as waiting this long; a live
+// heartbeat would know sooner. By then its own sound or notice has long told the person.
+export const OTHER_WAITING_MS = 2 * 60 * 60_000
+
+/** The other chats worth a word: those that need the person, then those still at work, most recent first. */
+export function otherChats(saved: readonly (SavedChecklist | undefined)[], at: number): GlanceOtherChat[] {
+  const isNeeding = (one: SavedChecklist) => one.list.phase === 'needsYou' || one.list.phase === 'stuck'
+  return saved
+    .filter((one): one is SavedChecklist => {
+      // Only a chat that said it is open: one that ended, or saved before 0.25, is never named.
+      if (!one?.list || one.isOpen !== true || typeof one.at !== 'number') return false
+      const isWorking = one.list.phase === 'working' || one.list.phase === 'background'
+      return isNeeding(one) ? at - one.at <= OTHER_WAITING_MS : isWorking && at - one.at <= OTHER_WORKING_MS
+    })
+    .sort((a, b) => Number(isNeeding(b)) - Number(isNeeding(a)) || b.at - a.at)
+    .map(one => ({ title: one.list.title, needsYou: isNeeding(one) }))
+}
+
+/** What the band says of the other chats, in whole pieces: who needs the person first, then how many are at work. */
+export function otherChatsWords(others: readonly GlanceOtherChat[]): string[] {
+  const waiting = others.filter(one => one.needsYou)
+  const working = others.length - waiting.length
+  if (waiting.length === 0) return working === 0 ? [] : [`${working === 1 ? '1 other chat' : `${working} other chats`} at work`]
+  const first =
+    waiting.length === 1
+      ? `Another chat needs you: ${waiting[0]?.title ?? ''}`
+      : `${waiting.length} other chats need you: ${waiting.map(one => one.title).join(', ')}`
+  return [first, ...(working === 0 ? [] : [`${working} more at work`])]
+}

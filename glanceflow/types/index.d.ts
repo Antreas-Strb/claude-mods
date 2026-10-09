@@ -117,6 +117,13 @@ export type GlanceUsage = {
   costUsd: number | null
 }
 
+/** Another chat on this computer, as this one mentions it: its job's name, and whether it needs the person or works on. */
+export type GlanceOtherChat = {
+  title: string
+  /** True when it waits on the person or is stuck; false while it works. */
+  needsYou: boolean
+}
+
 /** How a job ended, as the history shows it. */
 export type GlanceOutcome = 'done' | 'stopped' | 'stuck' | 'waiting' | 'background' | 'working'
 
@@ -199,6 +206,10 @@ declare module 'claude-code' {
       tidyAt: number
       /** When the last checkpoint was saved before tidying up; null when none was. */
       checkpointAt: number | null
+      /** The other chats that need the person or are at work, read every little while from what each one saves. */
+      otherChats: GlanceOtherChat[]
+      /** Whether the band names the other chats at all: off before sharing the screen, say. */
+      showsOthers: boolean
     }
   }
 }
