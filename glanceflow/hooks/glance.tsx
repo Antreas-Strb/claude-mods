@@ -224,6 +224,7 @@ const SHIP_PROMPT = `The work is finished. Ship it on GitHub, in order, and stop
    ## Verification, readable in under a minute.
 5. Wait with gh pr checks --watch. Once every check passes, or there are none, run gh pr merge --squash --delete-branch.
    If a check fails or the merge conflicts, do not merge: show what failed and stop.
+   Never merge with --admin or bypass branch protection in any other way; if the merge is blocked, say why and stop.
 6. End with the pull request link and one line on the result.`
 
 const CHECKPOINT_PROMPT = `This chat is about to be compacted to free up room. Write a checkpoint so the work carries on
