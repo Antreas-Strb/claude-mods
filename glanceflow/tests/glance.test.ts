@@ -6,7 +6,7 @@ import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 import { activityOf, asksQuestion, carryTokens, questionOf, isButtonsOnly, isContinueWords, liftButtons, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, wholePieces, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
 import { toggled } from '../hooks/logic'
-import { dayEntries, dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
+import { dayEntries, dayFromArgument, dayKey, expiredHistoryKeys, filesNote, historyDay, historyKey, longDay, mergedEntries, paceFromHistory, sharedDayKeys, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
 const PLAN = 'mcp__glanceflow__plan_steps'
 const PROGRESS = 'mcp__glanceflow__report_progress'
@@ -992,6 +992,7 @@ const PANE = {
 /** A project folder, and a pane that opens. */
 function historyWorld(on: On, project: { cwd: string }) {
   on('session.cwd', () => ({ value: project.cwd }) as never)
+  on('session.id', () => ({ value: 'chat-1' }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }) as never)
   on('ui.close', () => ({ value: undefined }) as never)
 }
@@ -1030,6 +1031,24 @@ describe('history days', () => {
     expect(dayEntries(undefined)).toEqual([])
     expect(dayEntries(null)).toEqual([])
     expect(dayEntries({ jobId: 'a' })).toEqual([])
+  })
+
+  test("each chat keeps its own key for a day; the day's old shared key is told apart", () => {
+    const now = new Date(2026, 9, 6, 12).getTime()
+    expect(historyKey('2026-10-06', 'chat-1')).toBe('history:2026-10-06:chat-1')
+    expect(historyDay('history:2026-10-06:chat-1')).toBe('2026-10-06')
+    expect(historyDay('history:2026-10-06')).toBe('2026-10-06')
+    expect(sharedDayKeys(['history:2026-10-06', 'history:2026-10-06:chat-1', 'glanceEnabled'])).toEqual(['history:2026-10-06'])
+    expect(expiredHistoryKeys(['history:2026-08-01:chat-1', 'history:2026-09-06:chat-1', 'history:2026-09-20:chat-2'], now)).toEqual([
+      'history:2026-08-01:chat-1',
+    ])
+  })
+
+  test('jobs from several keys read once each, the later copy winning, oldest first', () => {
+    const early = { ...pastJob('a', '/p', 1, 60_000), startedAt: 5 }
+    const late = { ...pastJob('b', '/p', 1, 60_000), startedAt: 9 }
+    const redone = { ...early, title: 'Picked up again' }
+    expect(mergedEntries([[late, early], undefined, [redone]])).toEqual([redone, late])
   })
 })
 
@@ -2328,7 +2347,7 @@ test("once, GlanceFlow brings over Glance's settings and history; another mod's 
   await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
   await $.session.start({ cwd: '/work', surface: 'terminal' } as never)
 
-  expect(store.get('history:2026-10-06')).toEqual([job])
+  expect(store.get('history:2026-10-06:glance')).toEqual([job])
   expect(store.get('glanceDetail')).toBe('detailed')
   expect(store.get('glanceSound')).toBe('chime')
   expect(store.get('glanceEnabled')).toBeUndefined()
@@ -2391,6 +2410,7 @@ test('a finished job keeps the size and time of its steps, so the next job learn
   })
   on('store.keys', () => ({ value: [...store.keys()] }) as never)
   on('session.cwd', () => ({ value: '/work/landing-site' }) as never)
+  on('session.id', () => ({ value: 'chat-1' }) as never)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
   on('ui.toast', () => ({ value: undefined }) as never)
   on('tool.call', () => ({ result: {} as never }))
@@ -3093,4 +3113,57 @@ test('Tidy it up saves a checkpoint first, compacts keeping it, and Claude reads
   const composed = await $.prompt.compose({ model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as never)
   const checkpoint = (composed as unknown as { sections: { id: string; text: string }[] }).sections.find(one => one.id === 'glanceflow:checkpoint')
   expect(checkpoint?.text).toContain('the pricing page is done')
+})
+
+test("two chats saving jobs the same day keep both; the day's old shared key moves into the chat's own once", async ($, on) => {
+  const clock = mock.clock(on, { now: new Date(2026, 9, 6, 9, 42).getTime() })
+  const at = new Date(2026, 9, 6, 9, 0).getTime()
+  const job = (jobId: string, title: string) => ({ ...pastJob(jobId, '/work/landing-site', 2, 60_000), startedAt: at, finishedAt: at + 60_000, title })
+  const store = new Map<string, unknown>([
+    ['adoptedGlance', true],
+    ['history:2026-10-06', [job('a', 'Saved before 0.25')]],
+    ['history:2026-10-06:chat-2', [job('b', 'Saved by another chat')]],
+  ])
+  const written: string[] = []
+  on('store.get', (_, e) => ({ value: store.get(e.key) }) as never)
+  on('store.set', (_, e) => {
+    written.push(e.key)
+    store.set(e.key, e.value)
+    return { value: undefined } as never
+  })
+  on('store.delete', (_, e) => {
+    store.delete(e.key)
+    return { value: undefined } as never
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }) as never)
+  historyWorld(on, { cwd: '/work/landing-site' })
+  on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: {} } as never }))
+  on('ui.toast', () => ({ value: undefined }) as never)
+  on('tool.call', () => ({ result: {} as never }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.Stop', () => ({}) as never)
+
+  await $.session.start({ cwd: '/work/landing-site', surface: 'terminal' } as never)
+  expect(store.has('history:2026-10-06')).toBe(false)
+  expect(store.get('history:2026-10-06:chat-1')).toEqual([job('a', 'Saved before 0.25')])
+
+  await $.turn.start({ text: 'Build the pricing section', turnId: 't1' })
+  await callTool($, { tool: PLAN, steps: ['Write it'] })
+  await clock.advance(60_000)
+  await callTool($, { tool: PROGRESS, task: 'Write it', percent: 100 })
+  await $.turn.complete({ answer: 'Done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  // This chat writes only its own key: the other chat's job is never read back and rewritten.
+  expect(written.filter(key => key.startsWith('history:'))).not.toContain('history:2026-10-06:chat-2')
+  expect(store.get('history:2026-10-06:chat-2')).toEqual([job('b', 'Saved by another chat')])
+  const result = await $.command.run({ command: 'glanceflow', args: 'history' } as never)
+  expect(result.text).toBe('History for 2026-10-06: 3 tasks.')
+  const shown = (await paneTexts($)).join('\n')
+  expect(shown).toContain('Saved before 0.25')
+  expect(shown).toContain('Saved by another chat')
+  expect(shown).toContain('Build the pricing section')
 })
