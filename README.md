@@ -71,7 +71,9 @@ The button above the prompt cycles **Simple → Details → Off**; in the Deskto
 
 ## What each status means
 
-![Each status GlanceFlow shows, with what it means and what to do](docs/glance-states.png)
+![Each status GlanceFlow shows in the Desktop app, from Working to All done, with what it means and what to do](docs/glance-states.png)
+
+<sub>Drawn by GlanceFlow 0.24.6 itself, as the Desktop app shows each header, for a sample job; the line under each says what it means.</sub>
 
 ## Pause and Continue
 
