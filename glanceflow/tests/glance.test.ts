@@ -5,7 +5,8 @@ import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
 import { activityOf, asksQuestion, carryTokens, questionOf, isButtonsOnly, isContinueWords, liftButtons, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, wholePieces, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
-import { dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
+import { toggled } from '../hooks/logic'
+import { dayEntries, dayFromArgument, dayKey, expiredHistoryKeys, filesNote, longDay, paceFromHistory, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
 const PLAN = 'mcp__glanceflow__plan_steps'
 const PROGRESS = 'mcp__glanceflow__report_progress'
@@ -1022,6 +1023,23 @@ describe('history days', () => {
       'history:2026-08-01',
     ])
   })
+
+  test('a stored day reads as its entries, and anything else as none', () => {
+    const day = [pastJob('a', '/p', 1, 60_000), pastJob('b', '/p', 2, 120_000)]
+    expect(dayEntries(day)).toEqual(day)
+    expect(dayEntries(undefined)).toEqual([])
+    expect(dayEntries(null)).toEqual([])
+    expect(dayEntries({ jobId: 'a' })).toEqual([])
+  })
+})
+
+test('/glanceflow on and off set a setting, and anything else flips it', () => {
+  expect(toggled('on', false)).toBe(true)
+  expect(toggled('on', true)).toBe(true)
+  expect(toggled('off', true)).toBe(false)
+  expect(toggled('off', false)).toBe(false)
+  expect(toggled('', true)).toBe(false)
+  expect(toggled('', false)).toBe(true)
 })
 
 test("each finished job is saved, and /glanceflow history shows the day's jobs for this project", async ($, on) => {
