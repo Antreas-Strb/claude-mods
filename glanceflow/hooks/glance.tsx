@@ -22,12 +22,16 @@ import {
   entryFromChecklist,
   expiredHistoryKeys,
   filesNote,
+  historyDay,
+  historyKey,
   longDay,
+  mergedEntries,
   projectName,
   shiftDay,
   weekSummary,
   paceFromHistory,
   plainDuration,
+  sharedDayKeys,
   upsertEntry,
 } from './history'
 import { findSecrets, maskPrivate } from './privacy'
@@ -505,16 +509,20 @@ const change = async ($: $, fn: (list: GlanceChecklist) => GlanceChecklist | nul
   return next
 }
 
+/** Every chat's jobs on these days (all kept days when none are named), each once, oldest first. */
+const readHistory = async ($: $, days?: readonly string[]): Promise<GlanceHistoryEntry[]> => {
+  const stored: unknown[] = []
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(HISTORY_PREFIX) && (days === undefined || days.includes(historyDay(key)))) stored.push(await $.store.get(key))
+  }
+
+  return mergedEntries(stored)
+}
+
 /** This project's pace from the History of the last 30 days; null when it isn't known yet. */
 const learnPace = async ($: $): Promise<number | null> => {
   try {
-    const project = await $.session.cwd()
-    const entries: GlanceHistoryEntry[] = []
-    for (const key of await $.store.keys()) {
-      if (key.startsWith(HISTORY_PREFIX)) entries.push(...dayEntries(await $.store.get(key)))
-    }
-
-    return paceFromHistory(entries, project)
+    return paceFromHistory(await readHistory($), await $.session.cwd())
   } catch {
     return null
   }
@@ -636,21 +644,15 @@ const continueJob = async ($: $) => {
 /** Loads one day of this project's history into the pane, and opens the pane when asked. */
 const showHistory = async ($: $, day: string, isOpening: boolean) => {
   const project = await $.session.cwd()
-  const stored = await $.store.get(`${HISTORY_PREFIX}${day}`)
   // Entries saved before the report fields existed get empty ones.
   const filled = (one: GlanceHistoryEntry) => ({ ...one, doneSteps: one.doneSteps ?? [], openSteps: one.openSteps ?? [], isQuickAnswer: one.isQuickAnswer ?? false })
-  const entries = dayEntries(stored)
+  const entries = (await readHistory($, [day]))
     .filter(one => one.project === project)
     .map(filled)
   const today = dayKey(await now($))
-  const saved = (await $.store.keys())
-    .filter(key => key.startsWith(HISTORY_PREFIX))
-    .map(key => key.slice(HISTORY_PREFIX.length))
+  const saved = (await $.store.keys()).filter(key => key.startsWith(HISTORY_PREFIX)).map(historyDay)
   const days = [...new Set([today, day, ...saved])].sort().reverse()
-  const myWeek: GlanceHistoryEntry[] = []
-  for (let back = WEEK_DAYS - 1; back >= 0; back--) {
-    myWeek.push(...dayEntries(back === 0 ? stored : await $.store.get(`${HISTORY_PREFIX}${shiftDay(day, -back)}`)))
-  }
+  const myWeek = await readHistory($, Array.from({ length: WEEK_DAYS }, (_, back) => shiftDay(day, -back)))
   await update($, historyAtom, (view): GlanceHistoryView => ({
     day,
     project,
@@ -747,10 +749,12 @@ const recordJob = async ($: $) => {
     if (list === null) return
     const project = await $.session.cwd()
     const day = dayKey(list.startedAt)
-    const entries = upsertEntry(await $.store.get(`${HISTORY_PREFIX}${day}`), entryFromChecklist(list, project, jobCost(list, await read($, usageAtom))))
-    await $.store.set(`${HISTORY_PREFIX}${day}`, entries)
+    // This chat's own key only: the store locks one set at a time, so a shared key could lose another chat's job.
+    const key = historyKey(day, await $.session.id())
+    await $.store.set(key, upsertEntry(await $.store.get(key), entryFromChecklist(list, project, jobCost(list, await read($, usageAtom)))))
     const view = await read($, historyAtom)
     if (view !== null && view.day === day && view.project === project) {
+      const entries = await readHistory($, [day])
       await update($, historyAtom, () => ({ ...view, entries: entries.filter(one => one.project === project) }))
     }
   } catch {
@@ -1071,14 +1075,15 @@ const adoptGlanceStore = async ($: $) => {
       const old = JSON.parse(await $.fs.read(`${dir}/${file.name}`)) as Record<string, unknown>
       for (const [key, value] of Object.entries(old)) {
         if (key.startsWith(HISTORY_PREFIX) && Array.isArray(value)) {
-          let entries = await $.store.get(key)
+          const own = historyKey(historyDay(key), 'glance')
+          let entries = await $.store.get(own)
           // Only Glance's own jobs: another mod may be called glance too.
           for (const entry of value as GlanceHistoryEntry[]) {
             if (typeof entry?.jobId === 'string' && Array.isArray(entry.doneSteps)) {
               entries = upsertEntry(entries, entry)
             }
           }
-          await $.store.set(key, entries ?? [])
+          await $.store.set(own, entries ?? [])
         } else if (settings.has(key) && !mine.has(key)) {
           await $.store.set(key, value)
         }
@@ -1086,6 +1091,20 @@ const adoptGlanceStore = async ($: $) => {
     }
   } catch {
     // Nothing to bring over.
+  }
+}
+
+// Up to 0.24 every chat's jobs of a day shared one key (sharedDayKeys); once, each moves into this chat's own key for its day.
+const splitSharedDays = async ($: $) => {
+  try {
+    const id = await $.session.id()
+    for (const key of sharedDayKeys(await $.store.keys())) {
+      const own = historyKey(historyDay(key), id)
+      await $.store.set(own, mergedEntries([await $.store.get(key), await $.store.get(own)]))
+      await $.store.delete(key)
+    }
+  } catch {
+    // Left as it is, the old day still reads; the next chat moves it.
   }
 }
 
@@ -1154,6 +1173,7 @@ export function registerGlance(on: On): void {
     if ((await read($, checklistAtom)) === null) {
       await restoreChecklist($)
     }
+    await splitSharedDays($)
     // The history keeps 30 days.
     for (const key of expiredHistoryKeys(await $.store.keys(), await now($))) {
       await $.store.delete(key)
