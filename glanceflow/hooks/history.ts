@@ -46,8 +46,6 @@ const OUTCOME: Record<GlanceChecklist['phase'], GlanceOutcome> = {
   done: 'done',
 }
 
-/** One job as the history keeps it. */
-/** One job as the history keeps it; `costUsd` is what it cost, where the host keeps a ledger. */
 /** "Added contact.html · changed styles.css and app.js": file names only, with the folder where two share a name. */
 export function filesNote(files: readonly GlanceFile[], most = 4): string {
   const base = (path: string) => path.split(/[\\/]/).pop() ?? path
@@ -76,6 +74,7 @@ export function entryFiles(entry: GlanceHistoryEntry): GlanceFile[] {
   return [...(entry.filesAdded ?? []).map(path => ({ path, isNew: true })), ...(entry.filesChanged ?? []).map(path => ({ path, isNew: false }))]
 }
 
+/** One job as the history keeps it; `costUsd` is what it cost, where the host keeps a ledger. */
 export function entryFromChecklist(list: GlanceChecklist, project: string, costUsd: number | null = null): GlanceHistoryEntry {
   const files = list.tasks.flatMap(one => one.files ?? [])
   const added = [...new Set(files.filter(one => one.isNew).map(one => one.path))]
@@ -123,11 +122,14 @@ export function paceFromHistory(entries: readonly GlanceHistoryEntry[], project:
   return units >= MIN_PACE_UNITS ? Math.round(ms / units) : null
 }
 
+/** A stored day's entries; a missing or wrong value reads as none. */
+export function dayEntries(stored: unknown): GlanceHistoryEntry[] {
+  return Array.isArray(stored) ? (stored as GlanceHistoryEntry[]) : []
+}
+
 /** The day's entries with this one added, or replacing its earlier self. */
 export function upsertEntry(entries: unknown, entry: GlanceHistoryEntry): GlanceHistoryEntry[] {
-  const list = Array.isArray(entries) ? (entries as GlanceHistoryEntry[]) : []
-
-  return [...list.filter(one => one.jobId !== entry.jobId), entry].sort((a, b) => a.startedAt - b.startedAt)
+  return [...dayEntries(entries).filter(one => one.jobId !== entry.jobId), entry].sort((a, b) => a.startedAt - b.startedAt)
 }
 
 /** Store keys of days older than the history keeps. */
@@ -149,33 +151,23 @@ export function shiftDay(day: string, by: number): string {
   return dayKey(new Date(year!, month! - 1, date! + by, 12).getTime())
 }
 
-/** "Tuesday 6 October 2026", or the YYYY-MM-DD day where the runtime has no date names. */
 /** The days the weekly report covers: the day picked and the 6 before it. */
 export const WEEK_DAYS = 7
 
-/** YYYY-MM-DD as "30 Sep 2026". */
-export function shortDay(day: string): string {
+function dateLabel(day: string, options: Intl.DateTimeFormatOptions): string {
   const [year, month, date] = day.split('-').map(Number)
   try {
-    return new Date(year!, month! - 1, date!, 12).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    return new Date(year!, month! - 1, date!, 12).toLocaleDateString('en-GB', options)
   } catch {
     return day
   }
 }
 
-export function longDay(day: string): string {
-  const [year, month, date] = day.split('-').map(Number)
-  try {
-    return new Date(year!, month! - 1, date!, 12).toLocaleDateString('en-GB', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    })
-  } catch {
-    return day
-  }
-}
+/** YYYY-MM-DD as "30 Sep 2026"; left as it is where the runtime has no date names. */
+export const shortDay = (day: string) => dateLabel(day, { day: 'numeric', month: 'short', year: 'numeric' })
+
+/** "Tuesday 6 October 2026". */
+export const longDay = (day: string) => dateLabel(day, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 
 /** Time as a manager would say it: "under a minute", "12 min", "1 h 5 min". */
 export function plainDuration(ms: number): string {
@@ -248,15 +240,7 @@ export function teamReport(
   return lines.join('\n')
 }
 
-/** The weekday people say: "Tuesday", or the YYYY-MM-DD day where the runtime has no date names. */
-function weekday(day: string): string {
-  const [year, month, date] = day.split('-').map(Number)
-  try {
-    return new Date(year!, month! - 1, date!, 12).toLocaleDateString('en-GB', { weekday: 'long' })
-  } catch {
-    return day
-  }
-}
+const weekday = (day: string) => dateLabel(day, { weekday: 'long' })
 
 /**
  * A personal summary of the 7 days up to `day`, across every project: how many steps Claude checked off,

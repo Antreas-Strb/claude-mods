@@ -89,7 +89,6 @@ export const GLYPH: Record<IconName, string> = {
 }
 
 const XMLNS = 'xmlns="http://www.w3.org/2000/svg"'
-const colorOf = (tone: Tone) => TONE[tone]
 
 /**
  * A line icon in one tone, `size` px wide. Given a taller `height` (a line of text), it sits centered in it, so a
@@ -97,12 +96,12 @@ const colorOf = (tone: Tone) => TONE[tone]
  */
 export function iconSvg(name: IconName, tone: Tone, size = 16, height = size): string {
   // Small icons get a heavier line, so they keep the weight of the text beside them.
-  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke="${colorOf(tone)}" stroke-width="${size <= 14 ? 2.1 : 1.75}" stroke-linecap="round" stroke-linejoin="round">${PATHS[name]}</svg>`
+  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke="${TONE[tone]}" stroke-width="${size <= 14 ? 2.1 : 1.75}" stroke-linecap="round" stroke-linejoin="round">${PATHS[name]}</svg>`
 }
 
 /** A filled disc with the icon cut out in white: a step that is done, failed, waits on you or stopped. */
 export function badgeSvg(name: IconName, tone: Tone, size = 16, height = size): string {
-  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" fill="${colorOf(tone)}"/><g stroke="#fff" stroke-width="2.3">${PATHS[name]}</g></svg>`
+  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" fill="${TONE[tone]}"/><g stroke="#fff" stroke-width="2.3">${PATHS[name]}</g></svg>`
 }
 
 const RING = 2 * Math.PI * 8.5
@@ -118,11 +117,11 @@ export function ringSvg(tone: Tone, size = 16, percent: number | null = null, tu
   const start = known ? -90 : -90 + (turn % 12) * 30
   const arc =
     length > 0.5
-      ? `<circle cx="12" cy="12" r="8.5" stroke="${colorOf(tone)}" stroke-width="3" stroke-dasharray="${length.toFixed(2)} ${RING.toFixed(2)}" transform="rotate(${start} 12 12)"/>`
+      ? `<circle cx="12" cy="12" r="8.5" stroke="${TONE[tone]}" stroke-width="3" stroke-dasharray="${length.toFixed(2)} ${RING.toFixed(2)}" transform="rotate(${start} 12 12)"/>`
       : ''
 
   // The track takes the ring's own tone, faint, so a ring barely begun still reads apart from a step to come.
-  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" stroke="${colorOf(tone)}" stroke-opacity=".4" stroke-width="3"/>${arc}</svg>`
+  return `<svg ${XMLNS} viewBox="0 0 24 24" width="${size}" height="${height}" fill="none" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" stroke="${TONE[tone]}" stroke-opacity=".4" stroke-width="3"/>${arc}</svg>`
 }
 
 /** A step still to come: an open ring. */
@@ -140,11 +139,11 @@ export function meterSvg(tone: Tone, width = 96, percent: number | null = null, 
   let fill = ''
   if (percent !== null) {
     const filled = Math.round((Math.max(0, Math.min(100, percent)) / 100) * width)
-    if (filled > 0) fill = `<rect width="${Math.max(filled, height)}" height="${height}" rx="3" fill="${colorOf(tone)}"/>`
+    if (filled > 0) fill = `<rect width="${Math.max(filled, height)}" height="${height}" rx="3" fill="${TONE[tone]}"/>`
   } else {
     const bar = Math.round(width * 0.28)
     const at = Math.round((width - bar) * Math.max(0, Math.min(1, sweep)))
-    fill = `<rect x="${at}" width="${bar}" height="${height}" rx="3" fill="${colorOf(tone)}"/>`
+    fill = `<rect x="${at}" width="${bar}" height="${height}" rx="3" fill="${TONE[tone]}"/>`
   }
 
   return `<svg ${XMLNS} viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${track}${fill}</svg>`
