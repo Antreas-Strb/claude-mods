@@ -1,5 +1,9 @@
 name: Plugin Security Scan
-on: [pull_request, push]
+on:
+  pull_request:
+  # Release tags point at a master commit the scan already passed; scanning them again only doubles the runs.
+  push:
+    branches: [master]
 permissions:
   contents: read
 jobs:
