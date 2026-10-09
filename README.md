@@ -4,9 +4,9 @@
 
 **See what Claude is doing, at a glance.** A calm checklist above the prompt: the plan, the step Claude is on, how far along it is, and a clear signal when Claude needs you.
 
-![GlanceFlow: a calm checklist above the prompt, filling in as Claude works](docs/glance-demo.gif)
+![GlanceFlow in the Claude Desktop app: the plan fills in as Claude works, Needs you shows Claude's question, and the job carries on to All done](docs/glance-demo.gif)
 
-<sub>A scripted job: the checklist frames are drawn by GlanceFlow itself; the window around them is illustrative.</sub>
+<sub>A scripted job: the checklist is drawn by GlanceFlow 0.24.6 itself; the window and the notice around it are illustrative.</sub>
 
 ## Install
 
