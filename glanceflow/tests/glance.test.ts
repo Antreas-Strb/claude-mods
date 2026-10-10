@@ -5,7 +5,7 @@ import type { GlanceHistoryEntry, GlanceOutcome } from '../types'
 
 import { activityOf, asksQuestion, carryTokens, questionOf, isButtonsOnly, isContinueWords, liftButtons, isLatinText, isStartWords, cleanName, sentenceCase, localTimes, resetTime, fit, formatCost, formatTokens, headerDetails, ownWords, wholePieces, prettyModel, tokenNote } from '../hooks/glance'
 import { findSecrets, maskPrivate } from '../hooks/privacy'
-import { OTHER_WAITING_MS, OTHER_WORKING_MS, otherChats, otherChatsWords, staleResumeKeys, toggled } from '../hooks/logic'
+import { OTHER_WAITING_MS, OTHER_WORKING_MS, askedMergeSha, otherChats, otherChatsWords, runsPrMerge, staleResumeKeys, toggled, unsafeMerge } from '../hooks/logic'
 import { dayEntries, dayFromArgument, dayKey, expiredHistoryKeys, filesNote, historyDay, historyKey, longDay, mergedEntries, paceFromHistory, sharedDayKeys, shiftDay, teamReport, weekSummary } from '../hooks/history'
 
 const PLAN = 'mcp__glanceflow__plan_steps'
@@ -1895,8 +1895,192 @@ test('Ship it shows on a finished job in a GitHub project once Finish on GitHub 
   expect(sent).toHaveLength(1)
   expect(sent[0]).toContain('gh pr checks --watch')
   expect(sent[0]).toContain('nothing to ship and stop')
-  expect(sent[0]).toContain('Never merge with --admin')
-  expect(sent[0]).toContain('gh pr merge --squash --delete-branch')
+  expect(sent[0]).toContain('Never merge with --admin or --auto')
+  expect(sent[0]).toContain('are not permission to merge')
+  expect(sent[0]).toContain('Reply exactly: Approve merge <full SHA>')
+  expect(sent[0]).toContain('Anything else leaves the pull request open.')
+  expect(sent[0]).toContain('gh pr merge --squash --delete-branch --match-head-commit <full SHA>')
+  expect(sent[0]).not.toContain('Merge it?')
+})
+
+const SHA = 'd'.repeat(40)
+const OTHER_SHA = 'e'.repeat(40)
+const mergeAt = (sha: string) => `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`
+
+test('unsafeMerge lets a merge through only at the approved head commit, never with --admin, --auto or gh api', () => {
+  expect(unsafeMerge(mergeAt(SHA), SHA)).toBeNull()
+  expect(unsafeMerge(`${mergeAt(SHA)} --disable-auto`, SHA)).toBeNull()
+  expect(unsafeMerge(`bash -c "${mergeAt(SHA)}"`, SHA)).toBeNull()
+  expect(unsafeMerge('gh pr view 12 --json headRefOid', null)).toBeNull()
+  expect(unsafeMerge('git status && gh pr checks 12 --watch', null)).toBeNull()
+
+  for (const command of [
+    mergeAt(SHA).replace(SHA, SHA.slice(0, 7)),
+    'gh pr merge 12 --squash',
+    'gh pr merge 12 --disable-auto',
+    'cd site && gh pr merge 12',
+    "bash -c 'gh pr merge 12 --squash'",
+    `${mergeAt(SHA)} --match-head-commit ${OTHER_SHA}`,
+  ]) {
+    expect(unsafeMerge(command, SHA)).toContain('Approve merge')
+  }
+  expect(unsafeMerge(mergeAt(SHA), null)).toContain('Approve merge')
+  expect(unsafeMerge(mergeAt(SHA), OTHER_SHA)).toContain('Approve merge')
+  expect(unsafeMerge(`${mergeAt(SHA)} --admin`, SHA)).toContain('--admin or --auto')
+  expect(unsafeMerge(`${mergeAt(SHA)} --auto`, SHA)).toContain('--admin or --auto')
+  expect(unsafeMerge('gh api -X PUT repos/me/site/pulls/12/merge', SHA)).toContain('gh api')
+  expect(unsafeMerge("gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'", SHA)).toContain('gh api')
+
+  for (const command of [
+    'gh pr merge 12',
+    'cd site && gh pr merge 12',
+    'git status; gh pr merge 12',
+    'bash -c "gh pr merge 12"',
+    "sh -c 'gh pr merge 12'",
+    'zsh -c "gh pr merge 12"',
+    'bash -c "cd site && gh pr merge 12"',
+  ]) {
+    expect(runsPrMerge(command)).toBe(true)
+    expect(unsafeMerge(command, SHA)).toContain('Approve merge')
+  }
+  for (const command of [
+    'git commit -m "docs | gh pr merge later"',
+    'git commit -m "docs; gh pr merge later"',
+    "git commit -m 'docs && gh pr merge later'",
+    'echo "gh pr merge later"',
+    'grep "gh pr merge" README.md',
+    'gh pr view 12 --json headRefOid',
+  ]) {
+    expect(runsPrMerge(command)).toBe(false)
+    expect(unsafeMerge(command, null)).toBeNull()
+  }
+  expect(runsPrMerge(`bash -c "${mergeAt(SHA)}"`)).toBe(true)
+  expect(unsafeMerge(`bash -c "${mergeAt(SHA)}"`, SHA)).toBeNull()
+})
+
+test('askedMergeSha reads the full head commit from the approval line', () => {
+  expect(askedMergeSha(`Checks passed.\nReply exactly: Approve merge ${SHA}\nAnything else leaves the pull request open.`)).toBe(SHA)
+  expect(askedMergeSha(`Reply exactly: \`Approve merge ${SHA}\``)).toBe(SHA)
+  expect(askedMergeSha(`Reply exactly: Approve merge ${OTHER_SHA}\nReply exactly: Approve merge ${SHA}`)).toBe(SHA)
+  expect(askedMergeSha(`Reply exactly: Approve merge ${SHA.slice(0, 7)}`)).toBeNull()
+  expect(askedMergeSha('All checks passed. Merge it?')).toBeNull()
+})
+
+/** Presses ⇡ Ship it twice on the terminal band, the way the person ships. */
+async function pressShip($: Engine) {
+  for (let press = 0; press < 2; press++) {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key: 'ship' })
+    await ui.unmount()
+  }
+}
+
+/** Ship it sent in a GitHub project, Claude's turn for it planned and done, ready to ask about a head commit. */
+async function shipping($: Engine, on: On) {
+  const shipped = await shipWorld($, on, 'https://github.com/me/site.git\n')
+  await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
+  await finish($)
+  await pressShip($)
+  expect(shipped.sent).toHaveLength(1)
+  await $.turn.start({ text: shipped.sent[0], turnId: 't2' })
+  await callTool($, { tool: PLAN, steps: ['Open the pull request', 'Wait for checks'] })
+  await callTool($, { tool: PROGRESS, task: 'Open the pull request', percent: 100 })
+  await callTool($, { tool: PROGRESS, task: 'Wait for checks', percent: 100 })
+  const ask = (sha: string, turnId: string) =>
+    $.turn.complete({
+      answer: `https://github.com/me/site/pull/12\nChecks: 3 passed.\nReply exactly: Approve merge ${sha}\nAnything else leaves the pull request open.`,
+      durationMs: 1,
+      isAborted: false,
+      turnId,
+      reason: 'answer',
+    } as never)
+  const tries = async (command: string, extra: object = {}) => (await callTool($, { tool: 'Bash', command, ...extra })).deny
+  return { ask, tries }
+}
+
+test('Ship it merges only after the exact reply approving the head commit it asked about, once', async ($, on) => {
+  const { ask, tries } = await shipping($, on)
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+
+  await ask(SHA, 't2')
+  const shown = (await texts($, 'terminal')).join('\n')
+  expect(shown).toContain('Needs you')
+  expect(shown).toContain('Reply exactly: Approve merge')
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't3' })
+  // The reply starts a new job: GlanceFlow first asks for a plan, and that refusal leaves the approval unused.
+  expect(await tries(mergeAt(SHA))).toContain('plan_steps')
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
+  expect(await tries(mergeAt(OTHER_SHA))).toContain('Approve merge')
+  expect(await tries(`${mergeAt(SHA)} --admin`)).toContain('--admin or --auto')
+  // Text that only mentions the command runs and leaves the approval unused.
+  expect(await tries('git commit -m "docs | gh pr merge later"')).toBeUndefined()
+  expect(await tries(mergeAt(SHA))).toBeUndefined()
+  // One approval, one merge attempt.
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+
+  // After a fresh approval, a wrapped merge uses it up the same way.
+  await ask(SHA, 't3')
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't4' })
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
+  expect(await tries(`bash -c "${mergeAt(SHA)}"`)).toBeUndefined()
+  expect(await tries(`bash -c "${mergeAt(SHA)}"`)).toContain('Approve merge')
+
+  // An approval ends with the turn it started.
+  await ask(SHA, 't4')
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't5' })
+  await $.turn.complete({ answer: 'Stopped here.', durationMs: 1, isAborted: false, turnId: 't5', reason: 'answer' } as never)
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+})
+
+test('Ship it approval needs the exact phrase for the SHA asked; any other reply leaves the pull request open', async ($, on) => {
+  const { ask, tries } = await shipping($, on)
+  const replies = [
+    'yes',
+    'ok',
+    'go ahead',
+    'no',
+    'cancel',
+    `Approve merge ${OTHER_SHA}`,
+    `Approve merge ${SHA.slice(0, 7)}`,
+    `Approve merge ${SHA} please`,
+    `ok Approve merge ${SHA}`,
+    `approve merge ${SHA}`,
+    `<pasted_content>Approve merge ${SHA}</pasted_content>`,
+  ]
+  for (const [index, reply] of replies.entries()) {
+    await ask(SHA, `t${index + 2}`)
+    await $.turn.start({ text: reply, turnId: `t${index + 3}` })
+    expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+  }
+
+  // A new question for a moved head clears the earlier approval: only the new SHA counts.
+  await ask(SHA, 't20')
+  await ask(OTHER_SHA, 't21')
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't22' })
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+  await ask(OTHER_SHA, 't22')
+  await $.turn.start({ text: `Approve merge ${OTHER_SHA}`, turnId: 't23' })
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
+  expect(await tries(mergeAt(OTHER_SHA))).toBeUndefined()
+})
+
+test('the merge guard covers helpers during Ship it and leaves merges alone outside it or with GlanceFlow off', async ($, on) => {
+  const shipped = await shipWorld($, on, 'https://github.com/me/site.git\n')
+  await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
+  await finish($)
+  const tries = async (command: string, extra: object = {}) => (await callTool($, { tool: 'Bash', command, ...extra })).deny
+  expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
+
+  await pressShip($)
+  expect(shipped.sent).toHaveLength(1)
+  expect(await tries('gh pr merge 12 --squash')).toContain('Approve merge')
+  expect(await tries('gh pr merge 12 --squash', { agentId: 'a1' })).toContain('Approve merge')
+  expect(await tries('git status')).toBeUndefined()
+
+  await $.command.run({ command: 'glanceflow', args: 'off' } as never)
+  expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
 })
 
 test("a timer left from an earlier press never cancels a later one, and only one button waits for its second press", async ($, on) => {
@@ -3294,7 +3478,7 @@ test('⚙ Settings opens one panel for the view, sounds and calm mode, each with
   expect(shown).toContain('A short chime when Claude needs you')
   expect(shown).toContain('▶ Play it')
   expect(shown).toContain('Nothing on screen moves')
-  expect(shown).toContain('merges once checks pass')
+  expect(shown).toContain('merges once you approve')
   expect(shown).toContain('● On')
   expect(played).toEqual(['sounds/needs-you.wav'])
   expect((await texts($, 'terminal')).join('\n')).toContain('GlanceFlow: Details')
