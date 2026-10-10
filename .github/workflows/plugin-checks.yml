@@ -1,0 +1,31 @@
+name: Plugin Checks
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  plugin-checks:
+    runs-on: ubuntu-latest
+    env:
+      # A pinned CLI must stay the version the checks were proven on.
+      DISABLE_AUTOUPDATER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Claude Code 2.1.296
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s 2.1.296
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Claude Code version
+        run: |
+          claude --version
+          claude --version | grep -F 2.1.296
+      - name: Validate marketplace
+        run: claude plugin validate .
+      - name: Validate plugin
+        run: claude plugin validate glanceflow
+      - name: Host tests
+        run: claude plugin test glanceflow
