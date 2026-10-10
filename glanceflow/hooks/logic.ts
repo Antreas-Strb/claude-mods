@@ -455,6 +455,77 @@ export function asksQuestion(answer: string): boolean {
   return /[?？؟]$/.test(end) || (end.endsWith(';') && /\p{Script=Greek}/u.test(end))
 }
 
+/** The full head SHA Ship it last asked the person to approve ("Reply exactly: Approve merge <SHA>"), or null. */
+export function askedMergeSha(answer: string): string | null {
+  return [...answer.matchAll(/Reply exactly:\s*`?Approve merge ([0-9a-f]{40})`?/g)].pop()?.[1] ?? null
+}
+
+/** Splits a shell command at ;, |, ||, &, && and newlines that stand outside single and double quotes. */
+function commandPieces(command: string): string[] {
+  const pieces: string[] = []
+  let piece = ''
+  let quote: string | null = null
+  for (let at = 0; at < command.length; at++) {
+    const char = command[at]
+    if (quote === null && ';|&\n'.includes(char)) {
+      pieces.push(piece)
+      piece = ''
+      if ((char === '|' || char === '&') && command[at + 1] === char) at++
+      continue
+    }
+    if (char === '\\' && quote !== "'") {
+      piece += char + (command[++at] ?? '')
+      continue
+    }
+    if (quote === null && (char === '"' || char === "'")) quote = char
+    else if (char === quote) quote = null
+    piece += char
+  }
+  return [...pieces, piece]
+}
+
+// The pieces of a command that run gh: pieces at the top level, and pieces of the quoted command string of
+// bash -c, sh -c or zsh -c. Text inside other quotes, like a commit message, is never a piece of its own.
+// shortcut: reads the command as text; gh started any other way is not detected, and a heredoc line that
+// starts with gh pr merge counts as a merge (refused, never allowed by mistake).
+const WRAPPED = /^\s*(?:ba|z)?sh\s+-c\s+(["'])([\s\S]*)\1\s*$/
+const ghPieces = (command: string): string[] =>
+  commandPieces(command).flatMap(piece => {
+    const wrapped = WRAPPED.exec(piece)
+    return wrapped ? ghPieces(wrapped[2]) : [piece]
+  })
+const PR_MERGE = /^\s*gh\s+pr\s+merge\b/
+const API_MERGE = /^\s*gh\s+api\b.*(?:pulls\/[^/\s]+\/merge\b|mergePullRequest)/
+
+/** Whether a shell command runs `gh pr merge`, as the Ship it guard reads it; text that only mentions it does not. */
+export const runsPrMerge = (command: string) => ghPieces(command).some(piece => PR_MERGE.test(piece))
+
+/**
+ * Why a shell command may not run during Ship it, or null when it may. Every `gh pr merge` it runs, wrapped in
+ * `bash -c` or not, names only the approved head commit with --match-head-commit and never --admin or --auto;
+ * merging through `gh api` is never allowed.
+ */
+export function unsafeMerge(command: string, approvedSha: string | null): string | null {
+  for (const part of ghPieces(command)) {
+    if (API_MERGE.test(part)) {
+      return 'Ship it merges only with gh pr merge --match-head-commit, never through gh api. Leave the pull request open.'
+    }
+    if (!PR_MERGE.test(part)) continue
+    if (/(?<![\w-])--(admin|auto)\b/.test(part)) {
+      return 'Ship it never merges with --admin or --auto. Leave the pull request open and tell the person why it cannot merge.'
+    }
+    const shas = [...part.matchAll(/(?<![\w-])--match-head-commit[=\s]+["']?([0-9a-f]{40})\b/g)].map(found => found[1])
+    if (approvedSha === null || shas.length === 0 || shas.some(sha => sha !== approvedSha)) {
+      return (
+        'Ship it merges only the head commit the person approved. End your turn by showing the pull request link, the ' +
+        'checks and the full head SHA, then "Reply exactly: Approve merge <full SHA>", and wait for exactly that reply. ' +
+        'Then run gh pr merge --squash --delete-branch --match-head-commit <that full SHA>.'
+      )
+    }
+  }
+  return null
+}
+
 export const MAX_QUESTION = 160
 
 /** The question Claude ended on, as one plain line: its last sentence, or the whole last paragraph when that sentence is a few words. */

@@ -204,7 +204,7 @@ declare module 'claude-code' {
       isGuarded: boolean
       /** Approve the plan first: Claude lays out its plan and waits for Start or a change. */
       approvePlan: boolean
-      /** Finish on GitHub: a finished job offers Ship it, which commits, opens a pull request and merges once checks pass. */
+      /** Finish on GitHub: a finished job offers Ship it, which commits, opens a pull request and merges once the person approves. */
       shipsOnGithub: boolean
       /** Whether this session's folder pushes to GitHub; Ship it shows only then. */
       hasGithub: boolean

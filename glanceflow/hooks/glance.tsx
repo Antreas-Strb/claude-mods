@@ -46,6 +46,7 @@ import {
   activityTarget,
   apiErrorSentence,
   applyProgress,
+  askedMergeSha,
   asksQuestion,
   carryTokens,
   cleanName,
@@ -93,6 +94,8 @@ import {
   settle,
   task,
   toggled,
+  runsPrMerge,
+  unsafeMerge,
 } from './logic'
 
 import type { SavedChecklist } from './logic'
@@ -222,10 +225,15 @@ const SHIP_PROMPT = `The work is finished. Ship it on GitHub, in order, and stop
    Push the branch, never the base branch.
 4. Open a ready pull request with gh pr create, or reuse the branch's open one. Body: ## Why, ## What changed,
    ## Verification, readable in under a minute.
-5. Wait with gh pr checks --watch. Once every check passes, or there are none, run gh pr merge --squash --delete-branch.
-   If a check fails or the merge conflicts, do not merge: show what failed and stop.
-   Never merge with --admin or bypass branch protection in any other way; if the merge is blocked, say why and stop.
-6. End with the pull request link and one line on the result.`
+5. Wait with gh pr checks --watch. If a check fails or the merge conflicts, do not merge: show what failed and stop.
+6. Passing checks, or no checks, are not permission to merge. Read the head commit with gh pr view --json headRefOid,
+   then end your turn by showing the pull request link, the checks and the full head SHA, then these two lines:
+   Reply exactly: Approve merge <full SHA>
+   Anything else leaves the pull request open.
+7. Only after I reply exactly "Approve merge <that SHA>", read the head commit again. If it changed, ask again. If it
+   matches, run gh pr merge --squash --delete-branch --match-head-commit <full SHA>. Any other reply: leave the pull request open.
+   Never merge with --admin or --auto, or bypass branch protection in any other way; if the merge is blocked, say why and stop.
+8. End with the pull request link and one line on the result.`
 
 const CHECKPOINT_PROMPT = `This chat is about to be compacted to free up room. Write a checkpoint so the work carries on
 without losing anything that matters. Cover, briefly: the goal; what is already done; what is left, in order; decisions
@@ -265,6 +273,31 @@ let heldMessage: { text: string; at: number } | null = null
 let limitLevel = 0
 // The press that armed the button now waiting: a timer left from an earlier press must not disarm a later one.
 let armedPress = 0
+// Ship it in this chat: the head commit Claude last asked to merge, and the one the person then said yes to.
+let isShipping = false
+let askedSha: string | null = null
+let approvedSha: string | null = null
+// Ship it's own prompt is still to start its turn; a merge Ship it allowed failed, so the next try needs a fresh yes;
+// the running turn answers a merge request with anything but the exact approval, so Ship it ends with it.
+let isShipTurnNext = false
+let hasFailedMerge = false
+let isDeclining = false
+
+/** Ship it is over in this chat: its merge guard no longer applies. */
+const endShipping = () => {
+  isShipping = false
+  askedSha = null
+  approvedSha = null
+  isShipTurnNext = false
+  hasFailedMerge = false
+  isDeclining = false
+}
+
+/** After a merge Ship it allowed: a merge that worked ends Ship it; a failed one keeps it guarded. */
+const noteMerge = (ran: { deny?: string; isError?: boolean }) => {
+  if (ran.deny === undefined && !ran.isError) endShipping()
+  else hasFailedMerge = true
+}
 // The main loop's running turn, for the Pause button; and whether a pause asked for its end.
 let runningTurn: string | undefined
 let isPausing = false
@@ -1012,12 +1045,16 @@ const setShipOnGithub = async ($: $, isOn: boolean) => {
   await $.store.set(SHIP_KEY, isOn)
 }
 
-/** Sends the close-out as the person's own message: cleanup, commit, pull request, merge once checks pass. */
-const shipIt = ($: $) =>
-  sendAsUser($, SHIP_PROMPT, async () => {
+/** Sends the close-out as the person's own message: cleanup, commit, pull request, merge once the person approves. */
+const shipIt = ($: $) => {
+  endShipping()
+  isShipping = true
+  isShipTurnNext = true
+  return sendAsUser($, SHIP_PROMPT, async () => {
     await $.prompt.fill({ text: SHIP_PROMPT })
     $.ui.toast('The ship-it steps are in the prompt box: press Enter to send them.')
   })
+}
 
 /** Approve the plan first: Claude lays out its plan, then waits for Start or a change. */
 const setApprove = async ($: $, isOn: boolean) => {
@@ -1207,6 +1244,7 @@ export function registerGlance(on: On): void {
     await update($, checkpointAtom, () => (saved?.sessionId === thisSession && typeof saved?.at === 'number' ? saved.at : null))
     await update($, calmAtom, () => isCalmMode)
     hasEnded = false
+    endShipping()
     // Tidying is housekeeping: a store that fails at it must not keep the chat from starting. It never prunes this
     // chat's own checklist, so the restore below still finds it.
     await tidySavedChecklists($).catch(() => undefined)
@@ -1342,7 +1380,7 @@ export function registerGlance(on: On): void {
       await setShipOnGithub($, isOn)
       return {
         text: isOn
-          ? 'A finished job now offers Ship it: commit, pull request, and merge once checks pass.'
+          ? 'A finished job now offers Ship it: commit, pull request, and merge once you approve.'
           : 'Ship it is off. Finished jobs stay on their branch.',
       }
     }
@@ -1570,6 +1608,23 @@ export function registerGlance(on: On): void {
     runningTurn = e.turnId
     noteSign($)
     const text = ownWords(e.text)
+    // Ship it, on a turn the person started (not a continuation or a slash command). Only the exact reply
+    // "Approve merge <SHA>" to a pending request approves that head commit. Any other reply declines it: the pull
+    // request stays open, the guard holds for that whole turn, and Ship it ends with it. A later turn of the person's
+    // own, with nothing pending and no failed merge to retry, means they moved on, and Ship it ends.
+    approvedSha = null
+    if (isShipping && text && !text.startsWith('/')) {
+      const pending = askedSha
+      askedSha = null
+      if (pending !== null) {
+        isDeclining = text !== `Approve merge ${pending}`
+        if (!isDeclining) approvedSha = pending
+      } else if (isShipTurnNext) {
+        isShipTurnNext = false
+      } else if (!hasFailedMerge && text !== CONTINUE_TEXT && !isContinueWords(text)) {
+        endShipping()
+      }
+    }
     // The person moved on: the tidy-up note has done its job.
     if (text && (await read($, recapAtom))) {
       await update($, recapAtom, () => false)
@@ -1684,8 +1739,20 @@ export function registerGlance(on: On): void {
       return { result: `Progress noted: ${percent}%.` }
     }
 
+    // Ship it merges only the head commit the person approved, never past branch protection; helpers too.
+    let isMerging = false
+    if (tool === 'Bash' && isShipping && (await read($, enabledAtom))) {
+      const command = String((e as unknown as { command?: unknown }).command ?? '')
+      const denied = unsafeMerge(command, approvedSha)
+      if (denied !== null) return { deny: denied }
+      isMerging = runsPrMerge(command)
+    }
+
     if (!isMain) {
+      // One approval, one merge attempt: used up as the merge runs, so even a failed one needs a fresh approval.
+      if (isMerging) approvedSha = null
       const ran = await next(e)
+      if (isMerging) noteMerge(ran)
       if (filePath !== '' && ran.deny === undefined && !ran.isError) {
         await noteFile($, filePath, isNewFile)
       }
@@ -1728,7 +1795,10 @@ export function registerGlance(on: On): void {
       }))
     }
 
+    // Past every check above, so a refusal here never uses up the approval.
+    if (isMerging) approvedSha = null
     const ran = await next(e)
+    if (isMerging) noteMerge(ran)
     noteSign($)
 
     if (ran.deny !== undefined) {
@@ -1848,6 +1918,14 @@ export function registerGlance(on: On): void {
     runningTurn = undefined
     const wasPaused = isPausing
     isPausing = false
+    // Ship it's merge request: the exact head commit asked about stays pending until the person replies, and an
+    // approval lasts only for the turn it started. A declining turn ends Ship it, even if Claude asks again in it;
+    // Esc ends it too, Pause does not.
+    const asked = isShipping && e.reason === 'answer' ? askedMergeSha(e.answer ?? '') : null
+    if (asked !== null) askedSha = asked
+    approvedSha = null
+    if (isDeclining || (e.reason === 'aborted' && !wasPaused)) endShipping()
+    isDeclining = false
 
     if (list !== null) {
       await change($, current => (current.activity === null ? current : { ...current, activity: null }))
@@ -1884,9 +1962,9 @@ export function registerGlance(on: On): void {
           // A quick answer needed no plan: one plain step instead of the placeholders.
           tasks: current.hasPlan ? current.tasks : carryTokens(current.tasks, [task('Answer your question', 'done')]),
         }))
-        // A finished job whose last message asks something still waits for the person.
-        const asked = questionOf(e.answer ?? '')
-        const isAsking = asksQuestion(e.answer ?? '')
+        // A finished job whose last message asks something, or asks to approve a merge, still waits for the person.
+        const asked = askedSha !== null ? `Reply exactly: Approve merge ${askedSha}` : questionOf(e.answer ?? '')
+        const isAsking = askedSha !== null || asksQuestion(e.answer ?? '')
         await change($, current => ({
           ...current,
           phase: isAsking ? 'needsYou' : 'done',
@@ -2104,7 +2182,7 @@ export function registerGlance(on: On): void {
           ships ? 'On' : 'Off',
           choice('ship', [['off', 'Off'], ['on', 'On']], ships ? 'on' : 'off', value => setShipOnGithub($, value === 'on')),
           ships
-            ? 'A finished job offers Ship it: Claude tidies the changes, opens a pull request and merges once checks pass.'
+            ? 'A finished job offers Ship it: Claude tidies the changes, opens a pull request and merges once you approve.'
             : 'Finished jobs stay on their branch. Turn on for a Ship it button in GitHub projects.',
         )}
         {group(
