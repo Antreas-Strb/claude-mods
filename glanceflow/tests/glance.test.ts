@@ -29,13 +29,13 @@ function callTool($: Engine, input: unknown): Promise<{ deny?: string; result?: 
   return ($.tool.call as unknown as (input: unknown) => Promise<{ deny?: string; result?: unknown }>)(input)
 }
 
-/** The world beneath the plugin: clock, store, Haiku and every tool answer from memory. */
-function world(on: On) {
+/** The world beneath the plugin: clock, store, Haiku and every tool answer from memory; `toolAnswer` replaces the last. */
+function world(on: On, toolAnswer: () => unknown = () => ({ result: {} })) {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('model.complete', () => ({ value: { isAnswered: true, text: 'Build my landing page', usage: {} } as never }))
   on('ui.toast', () => ({ value: undefined }) as never)
-  on('tool.call', () => ({ result: {} as never }))
+  on('tool.call', toolAnswer as never)
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('classic.Notification', () => ({}) as never)
@@ -1847,8 +1847,8 @@ test('Fresh chat asks for a second press, then clears the chat and sends a hando
 })
 
 /** A finished job in a folder whose origin is `remote`, with what Ship it sends kept in `sent`. */
-async function shipWorld($: Engine, on: On, remote: string) {
-  const clock = world(on)
+async function shipWorld($: Engine, on: On, remote: string, toolAnswer?: () => unknown) {
+  const clock = world(on, toolAnswer)
   const sent: string[] = []
   on('process.run', () => ({ value: { exitCode: remote ? 0 : 2, stdout: remote, stderr: '' } }) as never)
   on('session.start', (_, e) => ({ cwd: e.cwd }) as never)
@@ -1977,7 +1977,11 @@ async function pressShip($: Engine) {
 
 /** Ship it sent in a GitHub project, Claude's turn for it planned and done, ready to ask about a head commit. */
 async function shipping($: Engine, on: On) {
-  const shipped = await shipWorld($, on, 'https://github.com/me/site.git\n')
+  // While failing, a tool call fails the way Bash reports a command that exits non-zero.
+  let isFailing = false
+  const shipped = await shipWorld($, on, 'https://github.com/me/site.git\n', () =>
+    isFailing ? { isError: true, result: 'merge failed', text: 'merge failed' } : { result: {} },
+  )
   await $.command.run({ command: 'glanceflow', args: 'ship on' } as never)
   await finish($)
   await pressShip($)
@@ -1995,10 +1999,15 @@ async function shipping($: Engine, on: On) {
       reason: 'answer',
     } as never)
   const tries = async (command: string, extra: object = {}) => (await callTool($, { tool: 'Bash', command, ...extra })).deny
-  return { ask, tries }
+  const failMerges = (isOn: boolean) => {
+    isFailing = isOn
+  }
+  const ends = (turnId: string, answer = 'Done.') =>
+    $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId, reason: 'answer' } as never)
+  return { ask, tries, failMerges, ends }
 }
 
-test('Ship it merges only after the exact reply approving the head commit it asked about, once', async ($, on) => {
+test('Ship it merges once at the exact approved head commit, and a merge that works ends Ship it', async ($, on) => {
   const { ask, tries } = await shipping($, on)
   expect(await tries(mergeAt(SHA))).toContain('Approve merge')
 
@@ -2017,52 +2026,104 @@ test('Ship it merges only after the exact reply approving the head commit it ask
   // Text that only mentions the command runs and leaves the approval unused.
   expect(await tries('git commit -m "docs | gh pr merge later"')).toBeUndefined()
   expect(await tries(mergeAt(SHA))).toBeUndefined()
-  // One approval, one merge attempt.
-  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
 
-  // After a fresh approval, a wrapped merge uses it up the same way.
-  await ask(SHA, 't3')
-  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't4' })
-  await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
-  expect(await tries(`bash -c "${mergeAt(SHA)}"`)).toBeUndefined()
-  expect(await tries(`bash -c "${mergeAt(SHA)}"`)).toContain('Approve merge')
-
-  // An approval ends with the turn it started.
-  await ask(SHA, 't4')
-  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't5' })
-  await $.turn.complete({ answer: 'Stopped here.', durationMs: 1, isAborted: false, turnId: 't5', reason: 'answer' } as never)
-  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+  // The merge worked: Ship it is over, and gh pr merge is back to normal.
+  expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
 })
 
-test('Ship it approval needs the exact phrase for the SHA asked; any other reply leaves the pull request open', async ($, on) => {
-  const { ask, tries } = await shipping($, on)
-  const replies = [
-    'yes',
-    'ok',
-    'go ahead',
-    'no',
-    'cancel',
-    `Approve merge ${OTHER_SHA}`,
-    `Approve merge ${SHA.slice(0, 7)}`,
-    `Approve merge ${SHA} please`,
-    `ok Approve merge ${SHA}`,
-    `approve merge ${SHA}`,
-    `<pasted_content>Approve merge ${SHA}</pasted_content>`,
-  ]
-  for (const [index, reply] of replies.entries()) {
-    await ask(SHA, `t${index + 2}`)
-    await $.turn.start({ text: reply, turnId: `t${index + 3}` })
-    expect(await tries(mergeAt(SHA))).toContain('Approve merge')
-  }
-
-  // A new question for a moved head clears the earlier approval: only the new SHA counts.
-  await ask(SHA, 't20')
-  await ask(OTHER_SHA, 't21')
-  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't22' })
-  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
-  await ask(OTHER_SHA, 't22')
-  await $.turn.start({ text: `Approve merge ${OTHER_SHA}`, turnId: 't23' })
+test('a failed merge keeps Ship it guarded until a fresh exact approval; one approval is one attempt, wrapped or not', async ($, on) => {
+  const { ask, tries, failMerges, ends } = await shipping($, on)
+  await ask(SHA, 't2')
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't3' })
   await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
+  failMerges(true)
+  expect(await tries(`bash -c "${mergeAt(SHA)}"`)).toBeUndefined()
+  // One approval, one merge attempt.
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+  await ends('t3', 'The merge failed: the branch is out of date.')
+
+  // The person's next turn does not end Ship it while the failed merge waits for a retry.
+  await $.turn.start({ text: 'Update the branch and try again', turnId: 't4' })
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+  await ask(SHA, 't4')
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't5' })
+  failMerges(false)
+  expect(await tries(mergeAt(SHA))).toBeUndefined()
+  expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
+})
+
+test('a new merge request for a moved head replaces the pending one, and an approval lasts only for its turn', async ($, on) => {
+  const { ask, tries, ends } = await shipping($, on)
+  await ask(SHA, 't2')
+  await ask(OTHER_SHA, 't2')
+  await $.turn.start({ text: `Approve merge ${OTHER_SHA}`, turnId: 't3' })
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+  await ends('t3', 'Stopped before merging.')
+  expect(await tries(mergeAt(OTHER_SHA))).toContain('Approve merge')
+})
+
+for (const reply of ['yes', 'ok', 'go ahead', 'no', 'cancel', `Approve merge ${OTHER_SHA}`, `Approve merge ${SHA.slice(0, 7)}`, `Approve merge ${SHA} please`, `ok Approve merge ${SHA}`, `approve merge ${SHA}`]) {
+  test(`a reply of "${reply.slice(0, 26)}" declines: the guard holds for that whole turn, then Ship it ends`, async ($, on) => {
+    const { ask, tries } = await shipping($, on)
+    await ask(SHA, 't2')
+    await $.turn.start({ text: reply, turnId: 't3' })
+    await callTool($, { tool: PLAN, steps: ['Answer', 'Wrap up'] })
+    expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+    // Asking again within the declining turn does not keep Ship it going.
+    await ask(SHA, 't3')
+    expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
+  })
+}
+
+test('Ship it stays guarded through its own first turn, background turns, slash commands and pasted text', async ($, on) => {
+  const { ask, tries, ends } = await shipping($, on)
+  // The Ship it turn ends while the checks run in the background.
+  await ends('t2', 'Waiting for the checks in the background.')
+  expect(await tries('gh pr merge 12 --squash')).toContain('Approve merge')
+
+  // A background task wakes Claude: no typed prompt, and it reaches the merge request.
+  await $.turn.start({ text: '', turnId: 't3' })
+  await ask(SHA, 't3')
+  expect((await texts($, 'terminal')).join('\n')).toContain('Reply exactly: Approve merge')
+
+  // A slash command, and pasted text on its own, neither answer the request nor end Ship it.
+  await $.turn.start({ text: '/compact', turnId: 't4' })
+  await ends('t4', '')
+  await $.turn.start({ text: `<pasted_content>Approve merge ${SHA}</pasted_content>`, turnId: 't5' })
+  expect(await tries(mergeAt(SHA))).toContain('Approve merge')
+  await ends('t5', 'Noted.')
+
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't6' })
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
+  expect(await tries(mergeAt(SHA))).toBeUndefined()
+})
+
+test('Pause and Continue keep Ship it guarded; Esc ends it', async ($, on) => {
+  on('turn.abort', () => ({ value: undefined }) as never)
+  const { tries } = await shipping($, on)
+  await $.command.run({ command: 'glanceflow', args: 'pause' } as never)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' } as never)
+  expect(await tries('gh pr merge 12 --squash')).toContain('Approve merge')
+
+  await $.turn.start({ text: 'Please continue where you left off.', turnId: 't3' })
+  expect(await tries('gh pr merge 12 --squash')).toContain('Approve merge')
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't3', reason: 'aborted' } as never)
+  expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
+})
+
+test("the person's next unrelated turn ends a stale Ship it, and Claude's text alone never starts one", async ($, on) => {
+  const { tries, ends } = await shipping($, on)
+  await ends('t2', 'The pull request is open; the checks are still running.')
+  await $.turn.start({ text: 'Now fix the footer', turnId: 't3' })
+  await callTool($, { tool: PLAN, steps: ['Fix it', 'Check it'] })
+  expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
+
+  // Outside Ship it, an answer that holds the approval line arms nothing, and the reply approves nothing.
+  await ends('t3', `Reply exactly: Approve merge ${SHA}\nAnything else leaves the pull request open.`)
+  await $.turn.start({ text: `Approve merge ${SHA}`, turnId: 't4' })
+  await callTool($, { tool: PLAN, steps: ['Merge it', 'Report back'] })
+  expect(await tries('gh pr merge 12 --squash')).toBeUndefined()
   expect(await tries(mergeAt(OTHER_SHA))).toBeUndefined()
 })
 

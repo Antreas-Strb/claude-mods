@@ -277,6 +277,27 @@ let armedPress = 0
 let isShipping = false
 let askedSha: string | null = null
 let approvedSha: string | null = null
+// Ship it's own prompt is still to start its turn; a merge Ship it allowed failed, so the next try needs a fresh yes;
+// the running turn answers a merge request with anything but the exact approval, so Ship it ends with it.
+let isShipTurnNext = false
+let hasFailedMerge = false
+let isDeclining = false
+
+/** Ship it is over in this chat: its merge guard no longer applies. */
+const endShipping = () => {
+  isShipping = false
+  askedSha = null
+  approvedSha = null
+  isShipTurnNext = false
+  hasFailedMerge = false
+  isDeclining = false
+}
+
+/** After a merge Ship it allowed: a merge that worked ends Ship it; a failed one keeps it guarded. */
+const noteMerge = (ran: { deny?: string; isError?: boolean }) => {
+  if (ran.deny === undefined && !ran.isError) endShipping()
+  else hasFailedMerge = true
+}
 // The main loop's running turn, for the Pause button; and whether a pause asked for its end.
 let runningTurn: string | undefined
 let isPausing = false
@@ -1026,9 +1047,9 @@ const setShipOnGithub = async ($: $, isOn: boolean) => {
 
 /** Sends the close-out as the person's own message: cleanup, commit, pull request, merge once the person approves. */
 const shipIt = ($: $) => {
+  endShipping()
   isShipping = true
-  askedSha = null
-  approvedSha = null
+  isShipTurnNext = true
   return sendAsUser($, SHIP_PROMPT, async () => {
     await $.prompt.fill({ text: SHIP_PROMPT })
     $.ui.toast('The ship-it steps are in the prompt box: press Enter to send them.')
@@ -1223,9 +1244,7 @@ export function registerGlance(on: On): void {
     await update($, checkpointAtom, () => (saved?.sessionId === thisSession && typeof saved?.at === 'number' ? saved.at : null))
     await update($, calmAtom, () => isCalmMode)
     hasEnded = false
-    isShipping = false
-    askedSha = null
-    approvedSha = null
+    endShipping()
     // Tidying is housekeeping: a store that fails at it must not keep the chat from starting. It never prunes this
     // chat's own checklist, so the restore below still finds it.
     await tidySavedChecklists($).catch(() => undefined)
@@ -1589,9 +1608,23 @@ export function registerGlance(on: On): void {
     runningTurn = e.turnId
     noteSign($)
     const text = ownWords(e.text)
-    // Ship it: only the exact reply "Approve merge <SHA>" for the SHA Claude just asked about approves it; any other reply clears it.
-    approvedSha = askedSha !== null && text === `Approve merge ${askedSha}` ? askedSha : null
-    askedSha = null
+    // Ship it, on a turn the person started (not a continuation or a slash command). Only the exact reply
+    // "Approve merge <SHA>" to a pending request approves that head commit. Any other reply declines it: the pull
+    // request stays open, the guard holds for that whole turn, and Ship it ends with it. A later turn of the person's
+    // own, with nothing pending and no failed merge to retry, means they moved on, and Ship it ends.
+    approvedSha = null
+    if (isShipping && text && !text.startsWith('/')) {
+      const pending = askedSha
+      askedSha = null
+      if (pending !== null) {
+        isDeclining = text !== `Approve merge ${pending}`
+        if (!isDeclining) approvedSha = pending
+      } else if (isShipTurnNext) {
+        isShipTurnNext = false
+      } else if (!hasFailedMerge && text !== CONTINUE_TEXT && !isContinueWords(text)) {
+        endShipping()
+      }
+    }
     // The person moved on: the tidy-up note has done its job.
     if (text && (await read($, recapAtom))) {
       await update($, recapAtom, () => false)
@@ -1719,6 +1752,7 @@ export function registerGlance(on: On): void {
       // One approval, one merge attempt: used up as the merge runs, so even a failed one needs a fresh approval.
       if (isMerging) approvedSha = null
       const ran = await next(e)
+      if (isMerging) noteMerge(ran)
       if (filePath !== '' && ran.deny === undefined && !ran.isError) {
         await noteFile($, filePath, isNewFile)
       }
@@ -1764,6 +1798,7 @@ export function registerGlance(on: On): void {
     // Past every check above, so a refusal here never uses up the approval.
     if (isMerging) approvedSha = null
     const ran = await next(e)
+    if (isMerging) noteMerge(ran)
     noteSign($)
 
     if (ran.deny !== undefined) {
@@ -1883,9 +1918,14 @@ export function registerGlance(on: On): void {
     runningTurn = undefined
     const wasPaused = isPausing
     isPausing = false
-    // Ship it's merge request: the exact head commit asked about; an approval lasts only for the turn it started.
-    askedSha = isShipping && e.reason === 'answer' ? askedMergeSha(e.answer ?? '') : null
+    // Ship it's merge request: the exact head commit asked about stays pending until the person replies, and an
+    // approval lasts only for the turn it started. A declining turn ends Ship it, even if Claude asks again in it;
+    // Esc ends it too, Pause does not.
+    const asked = isShipping && e.reason === 'answer' ? askedMergeSha(e.answer ?? '') : null
+    if (asked !== null) askedSha = asked
     approvedSha = null
+    if (isDeclining || (e.reason === 'aborted' && !wasPaused)) endShipping()
+    isDeclining = false
 
     if (list !== null) {
       await change($, current => (current.activity === null ? current : { ...current, activity: null }))
